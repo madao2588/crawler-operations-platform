@@ -313,7 +313,7 @@ class _AppShellState extends State<AppShell> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        '制药招标监测系统',
+                        '网页采集运营平台',
                         style: TextStyle(
                           color: Colors.white,
                           fontSize: 18,

@@ -162,7 +162,7 @@ class _LoginPageState extends State<LoginPage> {
                               _BrandMark(),
                               SizedBox(height: 20),
                               Text(
-                                '制药招标监测系统',
+                                '网页采集运营平台',
                                 style: TextStyle(
                                   color: Colors.white,
                                   fontSize: 32,

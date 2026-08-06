@@ -9,7 +9,7 @@ class PharmaBidMonitorApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: '制药招标监测系统',
+      title: '网页采集运营平台',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(),
       home: const AppRouter(),
