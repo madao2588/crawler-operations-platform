@@ -3,6 +3,8 @@ __pycache__/
 *.sqlite3
 *.db
 *.log
+server/storage/snapshots/**
+!server/storage/snapshots/.gitkeep
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/

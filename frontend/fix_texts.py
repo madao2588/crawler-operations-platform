@@ -1,8 +1,0 @@
-﻿f = open('c:/Users/WELMAN/Downloads/my_third_app/crawler_system/frontend/lib/features/notices/presentation/pages/notices_page.dart', encoding='utf-8')
-content = f.read()
-f.close()
-content = content.replace('Text(\'第  页 / 共  页\')', 'Text(\\'第  页 / 共  页\\')')
-content = content.replace('SnackBar(content: Text(\'无法打开原文链接: \')),', 'SnackBar(content: Text(\\'无法打开原文链接: \\')),')
-f = open('c:/Users/WELMAN/Downloads/my_third_app/crawler_system/frontend/lib/features/notices/presentation/pages/notices_page.dart', 'w', encoding='utf-8')
-f.write(content)
-f.close()
