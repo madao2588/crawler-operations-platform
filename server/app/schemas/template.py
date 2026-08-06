@@ -34,6 +34,8 @@ class TaskTemplateRead(TaskTemplateBase):
     usage_count: int = Field(default=0, ge=0)
     last_used_at: datetime | None = None
 
+    model_config = {"from_attributes": True}
+
 
 class TestTemplateRequest(BaseModel):
     start_url: str = Field(..., min_length=1, max_length=2048)
@@ -61,3 +63,13 @@ class TestTemplateResponse(BaseModel):
     error: str | None = None
     trace: TemplateTestTrace | None = None
 
+
+class ManualCollectionRequest(BaseModel):
+    url: str = Field(..., min_length=1, max_length=2048)
+
+
+class ManualCollectionRead(BaseModel):
+    source_id: str
+    source_url: str
+    status: str
+    notice_id: int

@@ -56,6 +56,49 @@ class HttpTaskRepository implements TaskRepository {
   }
 
   @override
+  Future<List<TaskListItemModel>> fetchTasksByNames(
+    Iterable<String> names,
+  ) async {
+    final targetNames = names
+        .map((name) => name.trim())
+        .where((name) => name.isNotEmpty)
+        .toSet();
+    if (targetNames.isEmpty) {
+      return const <TaskListItemModel>[];
+    }
+
+    const pageSize = 100;
+    var pageNumber = 1;
+    final matched = <String, TaskListItemModel>{};
+    var total = 0;
+
+    do {
+      final page = await fetchTasks(
+        page: pageNumber,
+        pageSize: pageSize,
+        sortBy: 'name',
+        sortDir: 'asc',
+      );
+      total = page.total;
+      for (final task in page.items) {
+        final name = task.name.trim();
+        if (targetNames.contains(name)) {
+          matched[name] = task;
+        }
+      }
+      if (matched.length == targetNames.length) {
+        break;
+      }
+      pageNumber += 1;
+    } while ((pageNumber - 1) * pageSize < total);
+
+    return targetNames
+        .where(matched.containsKey)
+        .map((name) => matched[name]!)
+        .toList();
+  }
+
+  @override
   Future<bool> hasActiveOrQueuedTasksGlobally() async {
     final page = await fetchTasks(
       page: 1,
@@ -126,6 +169,26 @@ class HttpTaskRepository implements TaskRepository {
         const TaskRunResultModel(
           taskId: 0,
           status: '',
+          recoveredStaleRun: false,
+        );
+  }
+
+  @override
+  Future<RunAllEnabledResultModel> runAllEnabledTasks() async {
+    final json = await apiClient.postJson(ApiPaths.tasksRunEnabled);
+    final response = ApiResponse<RunAllEnabledResultModel>.fromJson(
+      json,
+      (rawData) => RunAllEnabledResultModel.fromJson(
+        rawData as Map<String, dynamic>? ?? {},
+      ),
+    );
+    return response.data ??
+        const RunAllEnabledResultModel(
+          queuedTaskIds: [],
+          skippedTaskIds: [],
+          recoveredTaskIds: [],
+          quarantinedTaskIds: [],
+          errors: [],
         );
   }
 

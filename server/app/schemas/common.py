@@ -1,7 +1,9 @@
 from datetime import datetime
 from typing import Generic, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
+
+from app.schemas.serialization import dt_to_utc_iso_z
 
 
 T = TypeVar("T")
@@ -55,6 +57,10 @@ class LogRead(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+    @field_serializer("created_at", when_used="json")
+    def _serialize_created_at_utc_z(self, value: datetime) -> str:
+        return dt_to_utc_iso_z(value) or ""
 
 
 class LogSummary(BaseModel):

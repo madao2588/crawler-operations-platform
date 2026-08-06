@@ -6,9 +6,15 @@ import '../config/app_config.dart';
 
 class ApiClient {
   static String? _authToken;
+  static Future<void> Function()? _unauthorizedHandler;
+  static bool _handlingUnauthorized = false;
 
   static void setAuthToken(String? token) {
     _authToken = token;
+  }
+
+  static void setUnauthorizedHandler(Future<void> Function()? handler) {
+    _unauthorizedHandler = handler;
   }
 
   final String baseUrl;
@@ -34,6 +40,7 @@ class ApiClient {
         .get(uri, headers: _headers())
         .timeout(requestTimeout, onTimeout: _onTimeout);
     if (response.statusCode < 200 || response.statusCode >= 300) {
+      await _maybeHandleUnauthorized(path, response.statusCode);
       var msg = 'Request failed (${response.statusCode})';
       try {
         final decoded = jsonDecode(response.body);
@@ -64,7 +71,7 @@ class ApiClient {
     final response = await _httpClient
         .get(uri, headers: _headers())
         .timeout(requestTimeout, onTimeout: _onTimeout);
-    return _decodeResponse(response);
+    return _decodeResponse(response, path: path);
   }
 
   Future<Map<String, dynamic>> postJson(
@@ -79,7 +86,7 @@ class ApiClient {
           body: body == null ? null : jsonEncode(body),
         )
         .timeout(requestTimeout, onTimeout: _onTimeout);
-    return _decodeResponse(response);
+    return _decodeResponse(response, path: path);
   }
 
   Future<Map<String, dynamic>> putJson(
@@ -94,7 +101,22 @@ class ApiClient {
           body: body == null ? null : jsonEncode(body),
         )
         .timeout(requestTimeout, onTimeout: _onTimeout);
-    return _decodeResponse(response);
+    return _decodeResponse(response, path: path);
+  }
+
+  Future<Map<String, dynamic>> patchJson(
+    String path, {
+    Map<String, dynamic>? body,
+  }) async {
+    final uri = Uri.parse('$baseUrl$path');
+    final response = await _httpClient
+        .patch(
+          uri,
+          headers: _headers(includeContentType: true),
+          body: body == null ? null : jsonEncode(body),
+        )
+        .timeout(requestTimeout, onTimeout: _onTimeout);
+    return _decodeResponse(response, path: path);
   }
 
   Future<Map<String, dynamic>> deleteJson(String path) async {
@@ -102,7 +124,7 @@ class ApiClient {
     final response = await _httpClient
         .delete(uri, headers: _headers())
         .timeout(requestTimeout, onTimeout: _onTimeout);
-    return _decodeResponse(response);
+    return _decodeResponse(response, path: path);
   }
 
   Never _onTimeout() {
@@ -121,19 +143,29 @@ class ApiClient {
     return headers;
   }
 
-  Map<String, dynamic> _decodeResponse(http.Response response) {
+  Future<Map<String, dynamic>> _decodeResponse(
+    http.Response response, {
+    required String path,
+  }) async {
     late final Map<String, dynamic> decoded;
     try {
       final raw = jsonDecode(response.body);
       if (raw is! Map<String, dynamic>) {
-        throw ApiException('服务器返回格式异常', statusCode: response.statusCode);
+        throw ApiException(
+          'Server returned an invalid response shape',
+          statusCode: response.statusCode,
+        );
       }
       decoded = raw;
     } on FormatException {
-      throw ApiException('服务器返回了无法解析的 JSON', statusCode: response.statusCode);
+      throw ApiException(
+        'Server returned invalid JSON',
+        statusCode: response.statusCode,
+      );
     }
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
+      await _maybeHandleUnauthorized(path, response.statusCode);
       throw ApiException(
         decoded['message']?.toString() ?? 'Request failed',
         statusCode: response.statusCode,
@@ -141,6 +173,28 @@ class ApiClient {
     }
 
     return decoded;
+  }
+
+  Future<void> _maybeHandleUnauthorized(String path, int statusCode) async {
+    if (statusCode != 401 || path == '/v1/auth/login') {
+      return;
+    }
+
+    final token = _authToken;
+    final handler = _unauthorizedHandler;
+    if (token == null ||
+        token.isEmpty ||
+        handler == null ||
+        _handlingUnauthorized) {
+      return;
+    }
+
+    _handlingUnauthorized = true;
+    try {
+      await handler();
+    } finally {
+      _handlingUnauthorized = false;
+    }
   }
 
   void dispose() {

@@ -1,7 +1,9 @@
-﻿import asyncio
+import asyncio
+import ipaddress
 import time
 from collections.abc import Mapping
 from urllib.parse import urlparse
+from urllib.request import getproxies
 
 import httpx
 from playwright.async_api import Error as PlaywrightError
@@ -23,6 +25,94 @@ DEFAULT_HEADERS = {
 _LOGIN_STORAGE_CACHE: dict[str, tuple[float, dict[str, object]]] = {}
 _LOGIN_STORAGE_CACHE_LOCK = asyncio.Lock()
 
+_NETWORK_ERROR_MARKERS = (
+    "connecterror",
+    "networkerror",
+    "connection closed",
+    "connection reset",
+    "err_connection_closed",
+    "name or service not known",
+    "nodename nor servname",
+    "network is unreachable",
+    "tls",
+    "ssl",
+    "handshake",
+)
+
+
+class FallbackFetchError(RuntimeError):
+    def __init__(self, *, static_exc: BaseException, dynamic_exc: BaseException) -> None:
+        self.static_exc = static_exc
+        self.dynamic_exc = dynamic_exc
+        super().__init__(
+            "Static fetch failed before dynamic fallback also failed. "
+            f"static={type(static_exc).__name__}: {static_exc}; "
+            f"dynamic={type(dynamic_exc).__name__}: {dynamic_exc}"
+        )
+
+
+def classify_fetch_exception(exc: BaseException) -> str | None:
+    for candidate in _walk_fetch_exceptions(exc):
+        if isinstance(candidate, httpx.HTTPStatusError):
+            status_code = candidate.response.status_code if candidate.response is not None else 0
+            if status_code == 403:
+                return "http_403"
+            if status_code == 429:
+                return "http_429"
+            return "http_rejected"
+        if isinstance(
+            candidate,
+            (httpx.TimeoutException, PlaywrightTimeoutError, TimeoutError, asyncio.TimeoutError),
+        ):
+            return "timeout"
+        if isinstance(candidate, (httpx.ConnectError, httpx.NetworkError, httpx.RemoteProtocolError)):
+            return "network_unreachable"
+
+    text = " ".join(str(part).lower() for part in _collect_exception_text(exc))
+    if any(marker in text for marker in _NETWORK_ERROR_MARKERS):
+        return "network_unreachable"
+    if "timeout" in text or "timed out" in text:
+        return "timeout"
+    if "status code 403" in text or "403 forbidden" in text:
+        return "http_403"
+    if "status code 429" in text:
+        return "http_429"
+    if "httpstatuserror" in text or "err_http_response_code_failure" in text or "status code" in text:
+        return "http_rejected"
+    return None
+
+
+def _walk_fetch_exceptions(exc: BaseException) -> list[BaseException]:
+    seen: set[int] = set()
+    queue: list[BaseException] = [exc]
+    out: list[BaseException] = []
+    while queue:
+        current = queue.pop(0)
+        marker = id(current)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        out.append(current)
+        if isinstance(current, FallbackFetchError):
+            queue.extend(
+                item
+                for item in (current.static_exc, current.dynamic_exc)
+                if isinstance(item, BaseException)
+            )
+        if isinstance(current.__cause__, BaseException):
+            queue.append(current.__cause__)
+        if isinstance(current.__context__, BaseException):
+            queue.append(current.__context__)
+    return out
+
+
+def _collect_exception_text(exc: BaseException) -> list[str]:
+    parts: list[str] = []
+    for candidate in _walk_fetch_exceptions(exc):
+        parts.append(type(candidate).__name__)
+        parts.append(str(candidate))
+    return parts
+
 
 async def fetch_static(
     url: str,
@@ -30,6 +120,7 @@ async def fetch_static(
     headers: Mapping[str, str] | None = None,
     timeout: float | None = None,
     cookies: Mapping[str, str] | None = None,
+    proxy: Mapping[str, object] | None = None,
 ) -> str:
     timeout_sec = float(timeout) if timeout is not None else float(settings.timeout)
     merged: dict[str, str] = dict(DEFAULT_HEADERS)
@@ -38,16 +129,44 @@ async def fetch_static(
 
     async def _request() -> str:
         client_timeout = httpx.Timeout(timeout_sec)
-        async with httpx.AsyncClient(
-            timeout=client_timeout,
-            follow_redirects=True,
-            headers=merged,
-        ) as client:
+        client_kwargs: dict[str, object] = {
+            "timeout": client_timeout,
+            "follow_redirects": True,
+            "headers": merged,
+            "trust_env": False,
+        }
+        resolved_proxy = resolve_outbound_proxy(url, proxy)
+        httpx_proxy = _build_httpx_proxy(resolved_proxy)
+        if httpx_proxy is not None:
+            client_kwargs["proxy"] = httpx_proxy
+        async with httpx.AsyncClient(**client_kwargs) as client:
             response = await client.get(url, cookies=cookies)
             response.raise_for_status()
             return response.text
 
     return await _with_retry(_request)
+
+
+async def _launch_chromium(chromium, launch_kwargs: dict[str, object]):
+    try:
+        return await chromium.launch(**launch_kwargs)
+    except PlaywrightError as exc:
+        if "Executable doesn't exist" not in str(exc):
+            raise
+        return await chromium.launch(**launch_kwargs, channel="chrome")
+
+
+async def _wait_for_dynamic_content(
+    page,
+    *,
+    wait_for_selector: str | None,
+    timeout_ms: int,
+) -> None:
+    if wait_for_selector:
+        await page.wait_for_selector(wait_for_selector, timeout=timeout_ms)
+        await page.wait_for_timeout(250)
+        return
+    await page.wait_for_timeout(2000)
 
 
 async def fetch_dynamic(
@@ -59,6 +178,7 @@ async def fetch_dynamic(
     cookie_domain: str | None = None,
     login_flow: Mapping[str, object] | None = None,
     proxy: Mapping[str, object] | None = None,
+    wait_for_selector: str | None = None,
 ) -> str:
     timeout_sec = float(timeout) if timeout is not None else float(settings.timeout)
     timeout_ms = max(5_000, int(timeout_sec * 1000))
@@ -67,17 +187,17 @@ async def fetch_dynamic(
     if headers:
         merged.update(headers)
     user_agent = merged.get("User-Agent") or DEFAULT_HEADERS["User-Agent"]
-    extra_headers = {
-        k: v for k, v in merged.items() if k.lower() != "user-agent"
-    }
+    extra_headers = {k: v for k, v in merged.items() if k.lower() != "user-agent"}
 
     async def _request() -> str:
         async with async_playwright() as playwright:
             launch_kwargs: dict[str, object] = {"headless": True}
-            browser_proxy = _build_playwright_proxy(proxy)
+            browser_proxy = _build_playwright_proxy(
+                resolve_outbound_proxy(url, proxy),
+            )
             if browser_proxy is not None:
                 launch_kwargs["proxy"] = browser_proxy
-            browser = await playwright.chromium.launch(**launch_kwargs)
+            browser = await _launch_chromium(playwright.chromium, launch_kwargs)
             try:
                 cache_key, cache_ttl_sec = _resolve_session_cache_options(login_flow)
                 cached_storage = await _get_cached_storage_state(cache_key)
@@ -94,16 +214,10 @@ async def fetch_dynamic(
                         raise ValueError("Invalid URL for cookie injection")
                     dom = (cookie_domain or "").strip()
                     if dom:
-                        cookie_list = [
-                            {"name": n, "value": v, "domain": dom, "path": "/"}
-                            for n, v in cookies.items()
-                        ]
+                        cookie_list = [{"name": n, "value": v, "domain": dom, "path": "/"} for n, v in cookies.items()]
                     else:
                         origin = f"{parsed.scheme}://{parsed.netloc}"
-                        cookie_list = [
-                            {"name": n, "value": v, "url": origin, "path": "/"}
-                            for n, v in cookies.items()
-                        ]
+                        cookie_list = [{"name": n, "value": v, "url": origin, "path": "/"} for n, v in cookies.items()]
                     await context.add_cookies(cookie_list)
                 page = await context.new_page()
                 try:
@@ -136,7 +250,11 @@ async def fetch_dynamic(
                         timeout=timeout_ms,
                         wait_until="domcontentloaded",
                     )
-                    await page.wait_for_timeout(2000)
+                    await _wait_for_dynamic_content(
+                        page,
+                        wait_for_selector=wait_for_selector,
+                        timeout_ms=timeout_ms,
+                    )
                     return await page.content()
                 finally:
                     await page.close()
@@ -145,6 +263,102 @@ async def fetch_dynamic(
                 await browser.close()
 
     return await _with_retry(_request)
+
+
+def resolve_outbound_proxy(
+    url: str,
+    explicit_proxy: Mapping[str, object] | None = None,
+    *,
+    system_proxies: Mapping[str, str] | None = None,
+) -> dict[str, str] | None:
+    if _should_bypass_proxy(url):
+        return None
+
+    normalized_explicit = _normalize_proxy(explicit_proxy)
+    if normalized_explicit is not None:
+        return normalized_explicit
+
+    configured_proxy = _normalize_proxy_server(
+        getattr(settings, "outbound_proxy_url", None),
+    )
+    if configured_proxy is not None:
+        return {"server": configured_proxy}
+
+    if not bool(getattr(settings, "use_system_proxy", True)):
+        return None
+
+    proxies = dict(system_proxies) if system_proxies is not None else getproxies()
+    scheme = (urlparse(url).scheme or "http").lower()
+    server = _normalize_proxy_server(proxies.get(scheme) or proxies.get("all"))
+    return {"server": server} if server is not None else None
+
+
+def _should_bypass_proxy(url: str) -> bool:
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").strip().lower().rstrip(".")
+    if not host:
+        return True
+    if host == "localhost":
+        return True
+    try:
+        if ipaddress.ip_address(host).is_loopback:
+            return True
+    except ValueError:
+        pass
+
+    raw_no_proxy = str(getattr(settings, "outbound_no_proxy", "") or "")
+    for raw_pattern in raw_no_proxy.split(","):
+        pattern = raw_pattern.strip().lower().lstrip(".").rstrip(".")
+        if not pattern:
+            continue
+        if host == pattern or host.endswith(f".{pattern}"):
+            return True
+    return False
+
+
+def _normalize_proxy(
+    proxy: Mapping[str, object] | None,
+) -> dict[str, str] | None:
+    if proxy is None:
+        return None
+    server = _normalize_proxy_server(proxy.get("server"))
+    if server is None:
+        return None
+    normalized = {"server": server}
+    username = proxy.get("username")
+    password = proxy.get("password")
+    if isinstance(username, str) and username:
+        normalized["username"] = username
+    if isinstance(password, str) and password:
+        normalized["password"] = password
+    return normalized
+
+
+def _normalize_proxy_server(value: object) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    server = value.strip()
+    if "://" not in server:
+        server = f"http://{server}"
+    parsed = urlparse(server)
+    if parsed.scheme not in {"http", "https", "socks5"} or not parsed.hostname:
+        return None
+    return server
+
+
+def _build_httpx_proxy(
+    proxy: Mapping[str, str] | None,
+) -> str | httpx.Proxy | None:
+    if proxy is None:
+        return None
+    server = proxy.get("server")
+    if not server:
+        return None
+    username = proxy.get("username")
+    password = proxy.get("password")
+    if username:
+        return httpx.Proxy(server, auth=(username, password or ""))
+    return server
 
 
 def _build_playwright_proxy(proxy: Mapping[str, object] | None) -> dict[str, str] | None:
@@ -169,11 +383,7 @@ def _resolve_session_cache_options(
     if login_flow is None:
         return None, 1800
     cache_key_raw = login_flow.get("session_key")
-    cache_key = (
-        cache_key_raw.strip()[:128]
-        if isinstance(cache_key_raw, str) and cache_key_raw.strip()
-        else None
-    )
+    cache_key = cache_key_raw.strip()[:128] if isinstance(cache_key_raw, str) and cache_key_raw.strip() else None
     ttl_raw = login_flow.get("session_ttl_sec")
     ttl_sec = 1800
     if isinstance(ttl_raw, (int, float)):
@@ -221,11 +431,7 @@ async def _is_cached_login_session_valid(
     if not isinstance(check_selector, str) or not check_selector.strip():
         return True
     check_url_raw = login_flow.get("session_check_url")
-    check_url = (
-        check_url_raw.strip()
-        if isinstance(check_url_raw, str) and check_url_raw.strip()
-        else target_url
-    )
+    check_url = check_url_raw.strip() if isinstance(check_url_raw, str) and check_url_raw.strip() else target_url
     timeout_ms = _bounded_timeout(login_flow.get("timeout_ms"), default_timeout_ms)
     timeout_ms = min(timeout_ms, 6_000)
     try:

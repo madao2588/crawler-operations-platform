@@ -1,3 +1,20 @@
+class NoticeSourceSiteOption {
+  final String sourceSite;
+  final String displayName;
+
+  const NoticeSourceSiteOption({
+    required this.sourceSite,
+    required this.displayName,
+  });
+
+  factory NoticeSourceSiteOption.fromJson(Map<String, dynamic> json) {
+    return NoticeSourceSiteOption(
+      sourceSite: json['source_site']?.toString().trim() ?? '',
+      displayName: json['display_name']?.toString().trim() ?? '',
+    );
+  }
+}
+
 class NoticeListItemModel {
   final int id;
   final String title;
@@ -9,6 +26,11 @@ class NoticeListItemModel {
   final int qualityScore;
   final List<String> matchedKeywords;
   final bool isHighPriority;
+  final String category;
+  final String? aiSummary;
+  final String reviewStatus;
+  final bool isArchived;
+  final String? remark;
   final int taskId;
 
   const NoticeListItemModel({
@@ -22,6 +44,11 @@ class NoticeListItemModel {
     required this.qualityScore,
     required this.matchedKeywords,
     required this.isHighPriority,
+    required this.category,
+    required this.aiSummary,
+    required this.reviewStatus,
+    required this.isArchived,
+    required this.remark,
     required this.taskId,
   });
 
@@ -39,8 +66,36 @@ class NoticeListItemModel {
           .map((item) => item.toString())
           .toList(),
       isHighPriority: json['is_high_priority'] as bool? ?? false,
+      category: json['category']?.toString() ?? '未分类',
+      aiSummary: json['ai_summary']?.toString(),
+      reviewStatus: json['review_status']?.toString() ?? '待关注',
+      isArchived: json['is_archived'] as bool? ?? false,
+      remark: json['remark']?.toString(),
       taskId: json['task_id'] as int? ?? 0,
     );
+  }
+}
+
+class NoticeReviewPayload {
+  final String? category;
+  final String? reviewStatus;
+  final bool? isArchived;
+  final String? remark;
+
+  const NoticeReviewPayload({
+    this.category,
+    this.reviewStatus,
+    this.isArchived,
+    this.remark,
+  });
+
+  Map<String, dynamic> toJson() {
+    return {
+      if (category != null) 'category': category,
+      if (reviewStatus != null) 'review_status': reviewStatus,
+      if (isArchived != null) 'is_archived': isArchived,
+      if (remark != null) 'remark': remark,
+    };
   }
 }
 
@@ -49,6 +104,7 @@ class NoticeDetailModel extends NoticeListItemModel {
   final String contentHtml;
   final String? contentHash;
   final String? snapshotPath;
+  final Map<String, dynamic>? metadata;
 
   const NoticeDetailModel({
     required super.id,
@@ -61,14 +117,21 @@ class NoticeDetailModel extends NoticeListItemModel {
     required super.qualityScore,
     required super.matchedKeywords,
     required super.isHighPriority,
+    required super.category,
+    required super.aiSummary,
+    required super.reviewStatus,
+    required super.isArchived,
+    required super.remark,
     required super.taskId,
     required this.contentText,
     required this.contentHtml,
     required this.contentHash,
     required this.snapshotPath,
+    required this.metadata,
   });
 
   factory NoticeDetailModel.fromJson(Map<String, dynamic> json) {
+    final rawMetadata = json['metadata'];
     return NoticeDetailModel(
       id: json['id'] as int? ?? 0,
       title: json['title']?.toString() ?? '',
@@ -82,11 +145,18 @@ class NoticeDetailModel extends NoticeListItemModel {
           .map((item) => item.toString())
           .toList(),
       isHighPriority: json['is_high_priority'] as bool? ?? false,
+      category: json['category']?.toString() ?? '未分类',
+      aiSummary: json['ai_summary']?.toString(),
+      reviewStatus: json['review_status']?.toString() ?? '待关注',
+      isArchived: json['is_archived'] as bool? ?? false,
+      remark: json['remark']?.toString(),
       taskId: json['task_id'] as int? ?? 0,
       contentText: json['content_text']?.toString() ?? '',
       contentHtml: json['content_html']?.toString() ?? '',
       contentHash: json['content_hash']?.toString(),
       snapshotPath: json['snapshot_path']?.toString(),
+      metadata:
+          rawMetadata is Map ? Map<String, dynamic>.from(rawMetadata) : null,
     );
   }
 }

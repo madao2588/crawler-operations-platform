@@ -9,10 +9,14 @@ from app.core.database import AsyncSessionLocal, close_db, init_db
 from app.core.scheduler import get_scheduler
 from app.repositories.auth_repo import AuthRepository
 from app.repositories.log_repo import LogRepository
+from app.repositories.keyword_rule_repo import KeywordRepository
 from app.repositories.task_repo import TaskRepository
+from app.repositories.template_repo import TemplateRepository
 from app.services.auth_service import AuthService
 from app.services.crawl_service import CrawlService
+from app.services.keyword_rule_service import KeywordService
 from app.services.task_service import TaskService
+from app.services.template_service import TemplateService
 
 
 settings = get_settings()
@@ -34,7 +38,8 @@ async def bootstrap_tasks() -> None:
             log_repo=log_repo,
             crawl_service=crawl_service,
         )
-        await task_service.ensure_example_task()
+        await task_service.ensure_required_source_tasks()
+        await crawl_service.recover_stale_tasks()
         await task_service.load_enabled_tasks()
 
 
@@ -45,6 +50,20 @@ async def bootstrap_auth() -> None:
         await auth_service.ensure_default_admin()
 
 
+async def bootstrap_templates() -> None:
+    async with AsyncSessionLocal() as session:
+        template_repo = TemplateRepository(session)
+        template_service = TemplateService(template_repo=template_repo)
+        await template_service.ensure_seed_data()
+
+
+async def bootstrap_keywords() -> None:
+    async with AsyncSessionLocal() as session:
+        keyword_repo = KeywordRepository(session)
+        keyword_service = KeywordService(keyword_repo)
+        await keyword_service.ensure_seed_data()
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     ensure_runtime_directories()
@@ -53,6 +72,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     if not scheduler.running:
         scheduler.start()
     await bootstrap_auth()
+    await bootstrap_keywords()
+    await bootstrap_templates()
     await bootstrap_tasks()
     try:
         yield

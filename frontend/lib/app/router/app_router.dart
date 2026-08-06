@@ -1,4 +1,4 @@
-﻿import 'dart:convert';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -21,10 +21,10 @@ class _AppRouterState extends State<AppRouter> {
   static const _prefUserName = 'app.userName';
   static const _prefAvatarBase64 = 'app.avatarBase64';
 
-  late final Future<void> _bootstrapFuture;
+  late Future<void> _bootstrapFuture;
   late final ApiClient _authClient;
   bool _isAuthenticated = false;
-  String _userName = '运营管理员';
+  String _userName = '\u8fd0\u8425\u7ba1\u7406\u5458';
   Uint8List? _avatarBytes;
 
   void _retryBootstrap() {
@@ -37,11 +37,13 @@ class _AppRouterState extends State<AppRouter> {
   void initState() {
     super.initState();
     _authClient = ApiClient();
+    ApiClient.setUnauthorizedHandler(_handleUnauthorizedSession);
     _bootstrapFuture = _loadSession();
   }
 
   @override
   void dispose() {
+    ApiClient.setUnauthorizedHandler(null);
     _authClient.dispose();
     super.dispose();
   }
@@ -65,19 +67,7 @@ class _AppRouterState extends State<AppRouter> {
       await _applySessionData(data, preferences: preferences);
     } catch (e, stack) {
       debugPrint('Session load error: $e\n$stack');
-      try {
-        final preferences = await SharedPreferences.getInstance();
-        await _clearStoredSession(preferences);
-      } catch (_) {}
-      ApiClient.setAuthToken(null);
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _isAuthenticated = false;
-        _userName = '运营管理员';
-        _avatarBytes = null;
-      });
+      await _resetSessionState();
       return;
     }
   }
@@ -113,14 +103,7 @@ class _AppRouterState extends State<AppRouter> {
       // Logout should still clear local state even if the backend is unavailable.
     }
 
-    await _clearStoredSession(preferences);
-    ApiClient.setAuthToken(null);
-
-    setState(() {
-      _isAuthenticated = false;
-      _userName = '运营管理员';
-      _avatarBytes = null;
-    });
+    await _resetSessionState(preferences: preferences);
   }
 
   Future<void> _applySessionData(
@@ -169,6 +152,45 @@ class _AppRouterState extends State<AppRouter> {
     await preferences.remove(_prefAvatarBase64);
   }
 
+  Future<void> _handleUnauthorizedSession() async {
+    final shouldNotify = _isAuthenticated;
+    await _resetSessionState(notify: shouldNotify);
+  }
+
+  Future<void> _resetSessionState({
+    SharedPreferences? preferences,
+    bool notify = false,
+  }) async {
+    final prefs = preferences ?? await SharedPreferences.getInstance();
+    await _clearStoredSession(prefs);
+    ApiClient.setAuthToken(null);
+
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _isAuthenticated = false;
+      _userName = '\u8fd0\u8425\u7ba1\u7406\u5458';
+      _avatarBytes = null;
+    });
+
+    if (!notify) {
+      return;
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('\u767b\u5f55\u5df2\u5931\u6548\uff0c\u8bf7\u91cd\u65b0\u767b\u5f55\u3002'),
+        ),
+      );
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<void>(
@@ -191,8 +213,8 @@ class _AppRouterState extends State<AppRouter> {
                   padding: const EdgeInsets.all(24),
                   child: AsyncErrorPanel(
                     error: snapshot.error!,
-                    title: '启动应用失败',
-                    retryLabel: '重新加载',
+                    title: '\u542f\u52a8\u5e94\u7528\u5931\u8d25',
+                    retryLabel: '\u91cd\u65b0\u52a0\u8f7d',
                     onRetry: _retryBootstrap,
                   ),
                 ),

@@ -1,25 +1,43 @@
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.dependencies import get_template_service
+from app.dependencies import (
+    get_current_session,
+    get_task_service,
+    get_template_service,
+    require_admin,
+)
 from app.schemas.common import ApiResponse, EmptyPayload
 from app.schemas.template import (
-    TaskTemplateCreate, 
-    TaskTemplateRead, 
+    ManualCollectionRead,
+    ManualCollectionRequest,
+    TaskTemplateCreate,
+    TaskTemplateRead,
     TaskTemplateUpdate,
     TestTemplateRequest,
-    TestTemplateResponse
+    TestTemplateResponse,
 )
 from app.services.template_service import TemplateService
+from app.services.task_service import TaskService
 from app.engine.test_pipeline import test_run
 
-router = APIRouter(prefix="/templates", tags=["templates"])
+router = APIRouter(
+    prefix="/templates",
+    tags=["templates"],
+    dependencies=[Depends(get_current_session)],
+)
 
-@router.post("/test", response_model=ApiResponse[TestTemplateResponse])
+
+@router.post(
+    "/test",
+    response_model=ApiResponse[TestTemplateResponse],
+    dependencies=[Depends(require_admin)],
+)
 async def test_template_rules(
     payload: TestTemplateRequest,
 ) -> ApiResponse[TestTemplateResponse]:
     result = await test_run(payload.start_url, payload.parser_rules)
     return ApiResponse(data=TestTemplateResponse(**result))
+
 
 @router.get("/tasks", response_model=ApiResponse[list[TaskTemplateRead]])
 async def list_task_templates(
@@ -28,7 +46,11 @@ async def list_task_templates(
     return ApiResponse(data=await service.list_task_templates())
 
 
-@router.post("/tasks", response_model=ApiResponse[TaskTemplateRead])
+@router.post(
+    "/tasks",
+    response_model=ApiResponse[TaskTemplateRead],
+    dependencies=[Depends(require_admin)],
+)
 async def create_task_template(
     payload: TaskTemplateCreate,
     service: TemplateService = Depends(get_template_service),
@@ -39,7 +61,11 @@ async def create_task_template(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.put("/tasks/{template_id}", response_model=ApiResponse[TaskTemplateRead])
+@router.put(
+    "/tasks/{template_id}",
+    response_model=ApiResponse[TaskTemplateRead],
+    dependencies=[Depends(require_admin)],
+)
 async def update_task_template(
     template_id: str,
     payload: TaskTemplateUpdate,
@@ -51,7 +77,11 @@ async def update_task_template(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.delete("/tasks/{template_id}", response_model=ApiResponse[EmptyPayload])
+@router.delete(
+    "/tasks/{template_id}",
+    response_model=ApiResponse[EmptyPayload],
+    dependencies=[Depends(require_admin)],
+)
 async def delete_task_template(
     template_id: str,
     service: TemplateService = Depends(get_template_service),
@@ -63,7 +93,11 @@ async def delete_task_template(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.post("/tasks/{template_id}/use", response_model=ApiResponse[TaskTemplateRead])
+@router.post(
+    "/tasks/{template_id}/use",
+    response_model=ApiResponse[TaskTemplateRead],
+    dependencies=[Depends(require_admin)],
+)
 async def track_task_template_use(
     template_id: str,
     service: TemplateService = Depends(get_template_service),
@@ -72,3 +106,23 @@ async def track_task_template_use(
         return ApiResponse(data=await service.track_task_template_use(template_id))
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post(
+    "/tasks/{template_id}/collect",
+    response_model=ApiResponse[ManualCollectionRead],
+    dependencies=[Depends(require_admin)],
+)
+async def collect_manual_source_article(
+    template_id: str,
+    payload: ManualCollectionRequest,
+    service: TaskService = Depends(get_task_service),
+) -> ApiResponse[ManualCollectionRead]:
+    try:
+        return ApiResponse(
+            data=await service.collect_manual_source(template_id, payload.url)
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

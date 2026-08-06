@@ -54,7 +54,8 @@ void main() {
     client.dispose();
   });
 
-  test('HttpTaskRepository.hasActiveOrQueuedTasksGlobally uses total', () async {
+  test('HttpTaskRepository.hasActiveOrQueuedTasksGlobally uses total',
+      () async {
     final mock = MockClient((request) async {
       expect(request.url.queryParameters['last_run'], 'active');
       expect(request.url.queryParameters['page_size'], '1');
@@ -78,12 +79,85 @@ void main() {
     client.dispose();
   });
 
+  test('HttpTaskRepository.fetchTasksByNames paginates until all matches are found',
+      () async {
+    final mock = MockClient((request) async {
+      expect(request.method, 'GET');
+      expect(request.url.path, '/v1/tasks');
+      expect(request.url.queryParameters['page_size'], '100');
+      expect(request.url.queryParameters['sort_by'], 'name');
+      final page = request.url.queryParameters['page'];
+      if (page == '1') {
+        return http.Response(
+          jsonEncode({
+            'code': 0,
+            'message': 'success',
+            'data': {
+              'items': [
+                {
+                  'id': 1,
+                  'name': 'Alpha Task',
+                  'start_url': 'https://alpha.example',
+                  'parser_rules': null,
+                  'cron_expr': '0 * * * *',
+                  'status': 1,
+                  'last_run_status': 'success',
+                  'last_run_at': null,
+                  'last_success_at': null,
+                  'last_error_message': null,
+                  'created_at': '2024-06-01T00:00:00',
+                },
+              ],
+              'total': 101,
+              'page': 1,
+              'page_size': 100,
+            },
+          }),
+          200,
+        );
+      }
+      expect(page, '2');
+      return http.Response(
+        jsonEncode({
+          'code': 0,
+          'message': 'success',
+          'data': {
+            'items': [
+              {
+                'id': 2,
+                'name': 'Beta Task',
+                'start_url': 'https://beta.example',
+                'parser_rules': null,
+                'cron_expr': '0 * * * *',
+                'status': 1,
+                'last_run_status': 'failed',
+                'last_run_at': null,
+                'last_success_at': null,
+                'last_error_message': null,
+                'created_at': '2024-06-01T00:00:00',
+              },
+            ],
+            'total': 101,
+            'page': 2,
+            'page_size': 100,
+          },
+        }),
+        200,
+      );
+    });
+    final client = ApiClient(baseUrl: 'http://localhost', httpClient: mock);
+    final repo = HttpTaskRepository(apiClient: client);
+    final tasks = await repo.fetchTasksByNames(const ['Alpha Task', 'Beta Task']);
+    expect(tasks.map((task) => task.name).toList(), ['Alpha Task', 'Beta Task']);
+    client.dispose();
+  });
+
   test('HttpTaskRepository.fetchTaskLogs parses run_summary payload', () async {
     final mock = MockClient((request) async {
       expect(request.method, 'GET');
       expect(request.url.path, '/v1/logs');
       expect(request.url.queryParameters['task_id'], '9');
-    expect(request.url.queryParameters['only_summary'], isNull);
+      expect(request.url.queryParameters['only_summary'], isNull);
       return http.Response(
         jsonEncode({
           'code': 0,
@@ -151,6 +225,62 @@ void main() {
     final repo = HttpTaskRepository(apiClient: client);
     final page = await repo.fetchTaskLogs(9, pageSize: 1, onlySummary: true);
     expect(page.items, isEmpty);
+    client.dispose();
+  });
+
+  test('HttpTaskRepository.runAllEnabledTasks posts run-enabled', () async {
+    final mock = MockClient((request) async {
+      expect(request.method, 'POST');
+      expect(request.url.path, '/v1/tasks/run-enabled');
+      return http.Response(
+        jsonEncode({
+          'code': 0,
+          'message': 'success',
+          'data': {
+            'queued_task_ids': [1, 2],
+            'skipped_task_ids': [3],
+            'recovered_task_ids': [2],
+            'quarantined_task_ids': [5],
+            'errors': [],
+          },
+        }),
+        200,
+      );
+    });
+    final client = ApiClient(baseUrl: 'http://localhost', httpClient: mock);
+    final repo = HttpTaskRepository(apiClient: client);
+    final result = await repo.runAllEnabledTasks();
+    expect(result.queuedTaskIds, [1, 2]);
+    expect(result.skippedTaskIds, [3]);
+    expect(result.recoveredTaskIds, [2]);
+    expect(result.quarantinedTaskIds, [5]);
+    expect(result.errors, isEmpty);
+    client.dispose();
+  });
+
+  test('HttpTaskRepository.runTask parses stale recovery flag', () async {
+    final mock = MockClient((request) async {
+      expect(request.method, 'POST');
+      expect(request.url.path, '/v1/tasks/9/run');
+      return http.Response(
+        jsonEncode({
+          'code': 0,
+          'message': 'success',
+          'data': {
+            'task_id': 9,
+            'status': 'queued',
+            'recovered_stale_run': true,
+          },
+        }),
+        200,
+      );
+    });
+    final client = ApiClient(baseUrl: 'http://localhost', httpClient: mock);
+    final repo = HttpTaskRepository(apiClient: client);
+    final result = await repo.runTask(9);
+    expect(result.taskId, 9);
+    expect(result.status, 'queued');
+    expect(result.recoveredStaleRun, isTrue);
     client.dispose();
   });
 }

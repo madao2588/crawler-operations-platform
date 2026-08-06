@@ -55,6 +55,90 @@ void main() {
     client.dispose();
   });
 
+  test('HttpNoticeRepository.fetchNotices adds dashboard drill-down filters',
+      () async {
+    final mock = MockClient((request) async {
+      expect(request.url.path, '/v1/notices');
+      expect(
+          request.url.queryParameters, containsPair('captured_today', 'true'));
+      expect(request.url.queryParameters, containsPair('source_site', '国家药监局'));
+      expect(request.url.queryParameters, containsPair('keyword_hit', 'false'));
+      expect(
+          request.url.queryParameters, containsPair('high_priority', 'true'));
+      expect(
+          request.url.queryParameters, containsPair('high_quality', 'false'));
+      expect(
+          request.url.queryParameters, containsPair('project_signal', '结果公示'));
+      return http.Response(
+        jsonEncode({
+          'code': 0,
+          'message': 'success',
+          'data': {
+            'items': <Map<String, Object?>>[],
+            'total': 0,
+            'page': 1,
+            'page_size': 20,
+          },
+        }),
+        200,
+      );
+    });
+    final client = ApiClient(baseUrl: 'http://localhost', httpClient: mock);
+    final repo = HttpNoticeRepository(apiClient: client);
+
+    await repo.fetchNotices(
+      capturedToday: true,
+      sourceSite: ' 国家药监局 ',
+      keywordHit: false,
+      highPriority: true,
+      highQuality: false,
+      projectSignal: ' 结果公示 ',
+    );
+
+    client.dispose();
+  });
+
+  test('HttpNoticeRepository.fetchSourceSites preserves ranked options',
+      () async {
+    final mock = MockClient((request) async {
+      expect(request.url.path, '/v1/notices/source-sites');
+      return http.Response.bytes(
+        utf8.encode(
+          jsonEncode({
+            'code': 0,
+            'message': 'success',
+            'data': [
+              {
+                'source_site': 'alpha.example',
+                'display_name': '科技部项目申报通知',
+              },
+              {
+                'source_site': 'beta.example',
+                'display_name': '广东省科技厅项目申报',
+              },
+            ],
+          }),
+        ),
+        200,
+        headers: {'content-type': 'application/json; charset=utf-8'},
+      );
+    });
+    final client = ApiClient(baseUrl: 'http://localhost', httpClient: mock);
+    final repo = HttpNoticeRepository(apiClient: client);
+
+    final options = await repo.fetchSourceSites();
+    expect(options.map((option) => option.sourceSite), [
+      'alpha.example',
+      'beta.example',
+    ]);
+    expect(options.map((option) => option.displayName), [
+      '科技部项目申报通知',
+      '广东省科技厅项目申报',
+    ]);
+
+    client.dispose();
+  });
+
   test('HttpNoticeRepository.fetchNoticeDetail hits detail path', () async {
     final mock = MockClient((request) async {
       expect(request.url.path, '/v1/notices/7');

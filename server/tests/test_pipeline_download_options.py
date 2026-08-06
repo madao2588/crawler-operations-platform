@@ -28,6 +28,7 @@ async def test_download_page_passes_login_flow_to_dynamic(monkeypatch) -> None:
         "http_headers": {"Accept-Language": "zh-CN"},
         "http_cookies": {"sid": "abc"},
         "cookie_domain": ".example.com",
+        "dynamic_wait_selector": ".items a[href], .article-content",
         "login_username": "alice",
         "login_password": "secret",
         "login_flow": {
@@ -51,6 +52,7 @@ async def test_download_page_passes_login_flow_to_dynamic(monkeypatch) -> None:
     assert html == "<html>ok</html>"
     assert captured["url"] == "https://example.com/protected"
     assert captured["cookie_domain"] == ".example.com"
+    assert captured["wait_for_selector"] == ".items a[href], .article-content"
     assert isinstance(captured.get("cookies"), dict)
     login_flow = captured.get("login_flow")
     assert isinstance(login_flow, dict)

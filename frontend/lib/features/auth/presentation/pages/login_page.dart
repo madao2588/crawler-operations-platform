@@ -23,7 +23,7 @@ class LoginPage extends StatefulWidget {
 
 class _LoginPageState extends State<LoginPage> {
   final _formKey = GlobalKey<FormState>();
-  final _userNameController = TextEditingController(text: 'madao');
+  final _userNameController = TextEditingController();
   final _passwordController = TextEditingController();
 
   Uint8List? _avatarBytes;
@@ -296,10 +296,6 @@ class _LoginPageState extends State<LoginPage> {
                                     }
                                     return null;
                                   },
-                                ),
-                                const SizedBox(height: 8),
-                                const Text(
-                                  '默认演示账号：madao / 666666',
                                 ),
                                 const SizedBox(height: 20),
                                 SizedBox(

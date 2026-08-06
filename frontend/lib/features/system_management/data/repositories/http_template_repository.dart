@@ -104,4 +104,28 @@ class HttpTemplateRepository implements TemplateRepository {
     );
     return response.data ?? const TestTemplateResponse();
   }
+
+  @override
+  Future<ManualCollectionResult> collectManualSource(
+    String templateId,
+    String url,
+  ) async {
+    final json = await apiClient.postJson(
+      ApiPaths.collectManualSource(templateId),
+      body: {'url': url},
+    );
+    final response = ApiResponse<ManualCollectionResult>.fromJson(
+      json,
+      (rawData) => ManualCollectionResult.fromJson(
+        rawData as Map<String, dynamic>? ?? {},
+      ),
+    );
+    return response.data ??
+        ManualCollectionResult(
+          sourceId: templateId,
+          sourceUrl: url,
+          status: '',
+          noticeId: 0,
+        );
+  }
 }

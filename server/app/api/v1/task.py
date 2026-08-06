@@ -1,12 +1,16 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.dependencies import get_task_service
+from app.dependencies import get_current_session, get_task_service, require_admin
 from app.schemas.common import ApiResponse, EmptyPayload, PageData
-from app.schemas.task import TaskCreate, TaskRead, TaskRunPayload, TaskUpdate
+from app.schemas.task import RunAllEnabledPayload, TaskCreate, TaskRead, TaskRunPayload, TaskUpdate
 from app.services.crawl_service import TaskRunConflictError
 from app.services.task_service import TaskBusyError, TaskService
 
-router = APIRouter(prefix="/tasks", tags=["tasks"])
+router = APIRouter(
+    prefix="/tasks",
+    tags=["tasks"],
+    dependencies=[Depends(get_current_session)],
+)
 
 
 @router.get("", response_model=ApiResponse[PageData[TaskRead]])
@@ -22,7 +26,7 @@ async def list_tasks(
 ) -> ApiResponse[PageData[TaskRead]]:
     if enabled not in {"all", "enabled", "disabled"}:
         raise HTTPException(status_code=400, detail="invalid enabled filter")
-    if last_run not in {"all", "success", "failed", "active", "never"}:
+    if last_run not in {"all", "success", "partial", "failed", "active", "never"}:
         raise HTTPException(status_code=400, detail="invalid last_run filter")
     if sort_by not in {"id", "name", "last_run_at", "created_at"}:
         raise HTTPException(status_code=400, detail="invalid sort_by")
@@ -40,6 +44,19 @@ async def list_tasks(
     return ApiResponse(data=data)
 
 
+@router.post(
+    "/run-enabled",
+    response_model=ApiResponse[RunAllEnabledPayload],
+    dependencies=[Depends(require_admin)],
+)
+async def run_enabled_tasks(
+    service: TaskService = Depends(get_task_service),
+) -> ApiResponse[RunAllEnabledPayload]:
+    """Enqueue a manual run for every enabled task (skips busy ones)."""
+    data = await service.run_all_enabled_tasks_now()
+    return ApiResponse(data=data)
+
+
 @router.get("/{task_id}", response_model=ApiResponse[TaskRead])
 async def get_task(
     task_id: int,
@@ -52,7 +69,7 @@ async def get_task(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.post("", response_model=ApiResponse[TaskRead])
+@router.post("", response_model=ApiResponse[TaskRead], dependencies=[Depends(require_admin)])
 async def create_task(
     payload: TaskCreate,
     service: TaskService = Depends(get_task_service),
@@ -64,7 +81,11 @@ async def create_task(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.put("/{task_id}", response_model=ApiResponse[TaskRead])
+@router.put(
+    "/{task_id}",
+    response_model=ApiResponse[TaskRead],
+    dependencies=[Depends(require_admin)],
+)
 async def update_task(
     task_id: int,
     payload: TaskUpdate,
@@ -79,7 +100,11 @@ async def update_task(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.delete("/{task_id}", response_model=ApiResponse[EmptyPayload])
+@router.delete(
+    "/{task_id}",
+    response_model=ApiResponse[EmptyPayload],
+    dependencies=[Depends(require_admin)],
+)
 async def delete_task(
     task_id: int,
     service: TaskService = Depends(get_task_service),
@@ -93,7 +118,11 @@ async def delete_task(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
-@router.post("/{task_id}/run", response_model=ApiResponse[TaskRunPayload])
+@router.post(
+    "/{task_id}/run",
+    response_model=ApiResponse[TaskRunPayload],
+    dependencies=[Depends(require_admin)],
+)
 async def run_task(
     task_id: int,
     service: TaskService = Depends(get_task_service),

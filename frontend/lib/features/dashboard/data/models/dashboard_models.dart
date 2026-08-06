@@ -36,12 +36,18 @@ class DashboardMetricsModel {
   final int keywordHitNotices;
   final int monitoringSiteCount;
   final int highPriorityNotices;
+  final int highQualityNotices;
+  final int projectDeclarationNotices;
+  final int resultPublicationNotices;
 
   const DashboardMetricsModel({
     required this.todayNewNotices,
     required this.keywordHitNotices,
     required this.monitoringSiteCount,
     required this.highPriorityNotices,
+    this.highQualityNotices = 0,
+    required this.projectDeclarationNotices,
+    required this.resultPublicationNotices,
   });
 
   factory DashboardMetricsModel.fromJson(Map<String, dynamic> json) {
@@ -50,6 +56,10 @@ class DashboardMetricsModel {
       keywordHitNotices: json['keyword_hit_notices'] as int? ?? 0,
       monitoringSiteCount: json['monitoring_site_count'] as int? ?? 0,
       highPriorityNotices: json['high_priority_notices'] as int? ?? 0,
+      highQualityNotices: json['high_quality_notices'] as int? ?? 0,
+      projectDeclarationNotices:
+          json['project_declaration_notices'] as int? ?? 0,
+      resultPublicationNotices: json['result_publication_notices'] as int? ?? 0,
     );
   }
 }
@@ -73,11 +83,13 @@ class KeywordHeatItemModel {
 
 class SourceDistributionItemModel {
   final String sourceSite;
+  final String displayName;
   final int noticeCount;
   final double percentage;
 
   const SourceDistributionItemModel({
     required this.sourceSite,
+    required this.displayName,
     required this.noticeCount,
     required this.percentage,
   });
@@ -85,6 +97,27 @@ class SourceDistributionItemModel {
   factory SourceDistributionItemModel.fromJson(Map<String, dynamic> json) {
     return SourceDistributionItemModel(
       sourceSite: json['source_site']?.toString() ?? '',
+      displayName: json['display_name']?.toString() ?? '',
+      noticeCount: json['notice_count'] as int? ?? 0,
+      percentage: (json['percentage'] as num?)?.toDouble() ?? 0,
+    );
+  }
+}
+
+class ProjectSignalItemModel {
+  final String label;
+  final int noticeCount;
+  final double percentage;
+
+  const ProjectSignalItemModel({
+    required this.label,
+    required this.noticeCount,
+    required this.percentage,
+  });
+
+  factory ProjectSignalItemModel.fromJson(Map<String, dynamic> json) {
+    return ProjectSignalItemModel(
+      label: json['label']?.toString() ?? '',
       noticeCount: json['notice_count'] as int? ?? 0,
       percentage: (json['percentage'] as num?)?.toDouble() ?? 0,
     );
@@ -98,6 +131,7 @@ class DashboardOverviewModel {
   final List<NoticeListItemModel> recentNotices;
   final List<KeywordHeatItemModel> keywordHeat;
   final List<SourceDistributionItemModel> sourceDistribution;
+  final List<ProjectSignalItemModel> projectSignalDistribution;
   final String? lastUpdatedAt;
 
   const DashboardOverviewModel({
@@ -107,6 +141,7 @@ class DashboardOverviewModel {
     required this.recentNotices,
     required this.keywordHeat,
     required this.sourceDistribution,
+    required this.projectSignalDistribution,
     required this.lastUpdatedAt,
   });
 
@@ -134,6 +169,11 @@ class DashboardOverviewModel {
           .whereType<Map<String, dynamic>>()
           .map(SourceDistributionItemModel.fromJson)
           .toList(),
+      projectSignalDistribution:
+          (json['project_signal_distribution'] as List<dynamic>? ?? [])
+              .whereType<Map<String, dynamic>>()
+              .map(ProjectSignalItemModel.fromJson)
+              .toList(),
       lastUpdatedAt: json['last_updated_at']?.toString(),
     );
   }

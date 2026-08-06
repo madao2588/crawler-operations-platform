@@ -12,4 +12,9 @@ abstract class TemplateRepository {
   Future<TaskTemplateModel> trackTaskTemplateUse(String templateId);
 
   Future<TestTemplateResponse> testTaskTemplate(TestTemplateRequest request);
+
+  Future<ManualCollectionResult> collectManualSource(
+    String templateId,
+    String url,
+  );
 }

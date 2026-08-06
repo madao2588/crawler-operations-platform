@@ -11,8 +11,8 @@ _SALT_BYTES = 16
 def hash_password(password: str, salt_hex: str | None = None) -> tuple[str, str]:
     salt = bytes.fromhex(salt_hex) if salt_hex else secrets.token_bytes(_SALT_BYTES)
     password_hash = hashlib.pbkdf2_hmac(
-        'sha256',
-        password.encode('utf-8'),
+        "sha256",
+        password.encode("utf-8"),
         salt,
         _PBKDF2_ITERATIONS,
     )

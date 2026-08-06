@@ -41,8 +41,9 @@ class DateFormatter {
       return null;
     }
 
+    // API returns UTC with ``Z`` or ``+00:00``; naive strings are treated as UTC wall clock.
     final hasExplicitTimezone = normalized.endsWith('Z') ||
-        RegExp(r'[+-]\d{2}:\d{2}$').hasMatch(normalized);
+        RegExp(r'[+-]\d{2}:\d{2}(:\d{2})?$').hasMatch(normalized);
 
     if (hasExplicitTimezone || direct.isUtc) {
       return direct;

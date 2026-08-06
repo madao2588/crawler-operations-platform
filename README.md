@@ -1,421 +1,145 @@
-# Crawler System 爬虫运营平台
+﻿# Crawler System
 
-这是一个基于 FastAPI 和 Flutter 构建的爬虫运营平台，目标不是只做“抓取脚本”，而是提供一套可管理、可观察、可复用的采集系统。
+Crawler System 是面向运营场景的采集平台。后端使用 FastAPI，默认前端使用 React。Flutter 仅保留为显式回退入口，不再作为 `npm start` 的默认模式。
 
-当前项目已经具备以下能力：
+说明：仓库根目录的 `npm start` 会转发到 `crawler_system`，最终启动行为与下表一致。
 
-- 任务管理：创建、编辑、启用、停用、删除、立即执行
-- 任务状态跟踪：`queued`、`running`、`success`、`failed`
-- 采集链路：下载、解析、清洗、质量评分、去重、入库、快照保存
-- 日志体系：全局日志、任务日志、日志摘要统计
-- 模板体系：模板列表、模板创建/编辑/删除、模板一键套用、模板使用次数统计
-- Flutter 运维控制台：仪表盘、公告中心、任务管理、全局日志、来源站点模板管理
+## 启动约定
 
-## 一、项目定位
+| 命令 | 作用 | 端口 |
+| --- | --- | --- |
+| `npm start` | 启动 FastAPI + React | 后端 `8000` / 前端 `8093` |
+| `npm run start:react` | 显式启动 React 组合 | 后端 `8000` / 前端 `8093` |
+| `npm run start:flutter` | 启动 FastAPI + Flutter 回退组合 | 后端 `8000` / 前端 `8093` |
+| `npm stop` | 停止当前组合 | - |
+| `npm run stop:flutter` | 停止 Flutter 回退组合 | - |
 
-这个项目适合用于以下场景：
+## 当前功能
 
-- 招标公告、通知公告、新闻资讯等网页信息采集
-- 需要定时抓取并保留快照的业务系统
-- 需要多人协作维护采集规则、模板和任务的内部平台
-- 想把“爬虫脚本”升级成“可运营的采集系统”
+- 登录与会话恢复
+- 任务创建、编辑、启停、立即执行
+- 抓取、解析、清洗、去重、快照保存
+- 公告中心、看板统计、日志摘录
+- 模板管理、关键词规则管理
+- CSV 导出
 
-相比临时脚本，本项目更强调：
+## 快速开始
 
-- 可维护：任务、模板、日志都有明确结构
-- 可追踪：每次运行的状态和错误可以回看
-- 可复用：站点模板可以沉淀和复用
-- 可扩展：后续可以继续接入多页抓取、模板治理、导出能力等
+1. 准备环境变量
 
-## 二、技术栈
+```powershell
+$env:CRAWLER_BOOTSTRAP_ADMIN_USERNAME = "admin"
+$env:CRAWLER_BOOTSTRAP_ADMIN_PASSWORD = "change-this-password"
+```
 
-### 后端
+2. 启动本地组合
 
-- Python 3.11+（建议使用 3.11；当前也已在 3.14 环境验证）
-- FastAPI
-- SQLAlchemy Async
-- SQLite
-- APScheduler
-- httpx
-- Playwright
-- readability-lxml
-- BeautifulSoup / lxml
+```powershell
+npm start
+```
 
-### 前端
+3. 如果本机 `8000` 或 `8093` 已被占用
 
-- Flutter
-- Flutter Web 优先
-- Material 3
+```powershell
+npm start -- -BackendPort 18000 -FrontendPort 18093
+```
 
-## 三、目录结构
+4. 停止当前组合
+
+```powershell
+npm stop
+```
+
+5. 运行本地校验
+
+```powershell
+.\scripts\dev-check.ps1
+```
+
+这条校验链会依次执行：
+
+- 后端 `pytest -q`
+- React 前端 `typecheck`
+- React 前端 `test`
+- React 前端 `build`
+- Flutter `analyze`
+- Flutter `test`
+
+## 前端模式切换
+
+- 默认模式：`npm start`
+- 显式 React：`npm run start:react`
+- 显式 Flutter 回退：`npm run start:flutter`
+- 停止当前组合：`npm stop`
+- 停止 Flutter 回退：`npm run stop:flutter`
+
+## 关键环境变量
+
+- `CRAWLER_BOOTSTRAP_ADMIN_USERNAME`
+- `CRAWLER_BOOTSTRAP_ADMIN_PASSWORD`
+- `CRAWLER_CORS_ALLOWED_ORIGINS`
+- `CRAWLER_CORS_ALLOWED_ORIGIN_REGEX`
+- `CRAWLER_OUTBOUND_PROXY_URL`
+- `CRAWLER_USE_SYSTEM_PROXY`
+- `CRAWLER_OUTBOUND_NO_PROXY`
+- `VITE_API_BASE_URL`
+- `API_BASE_URL`
+- `CRAWLER_FLUTTER_ROOT`
+
+说明：
+
+- React 默认通过同源代理访问 `/v1/*` 和 `/health`，本地联调通常不需要额外配置 `VITE_API_BASE_URL`。
+- 如果要把 React 静态包部署到独立域名，而 API 在另一个域名上，请在构建时设置 `VITE_API_BASE_URL`。
+- `API_BASE_URL` 仅供 Flutter 回退构建脚本使用。
+- Windows 默认代理、TUN 或 Fake-IP 场景下，爬虫和 Playwright 可能会继承系统代理；需要显式直连时，请同步设置 `CRAWLER_OUTBOUND_PROXY_URL`、`CRAWLER_USE_SYSTEM_PROXY` 和 `CRAWLER_OUTBOUND_NO_PROXY`。
+- 需求 1 的 7 个政府来源已纳入默认直连列表。若使用 Clash/Vortex 一类 TUN 代理，运行模式必须是 `rule`，并确保这些域名命中 `DIRECT`；`global` 模式会忽略域名直连规则，导致站点看似全部不可用。
+
+## 固定需求来源状态
+
+- 需求 1：7 个政府站点自动采集；2 个公众号不纳入自动采集验收，由使用人员自行查询，现有文章链接登记仅作为可选辅助入口。
+- 需求 2：丁香会议、中国药学会、生物谷、CPHI 覆盖会议列表与详情；生物谷来源可能触发验证码，默认不做绕过。
+- 需求 3：PubMed 通过 NCBI 官方接口自动采集；摩熵医药需要合法授权账号或授权导出；公众号竞品线索由使用人员自行查询，可选使用人工链接登记。
+
+## 本地开发说明
+
+系统 Flutter SDK 在这台机器上是只读安装，不能直接稳定执行 `flutter`。仓库内置了 wrapper：
+
+- [scripts/flutterw.ps1](scripts/flutterw.ps1)
+- [scripts/dev-up.ps1](scripts/dev-up.ps1)
+- [scripts/dev-check.ps1](scripts/dev-check.ps1)
+
+详情见：
+
+- [docs/local-dev.md](docs/local-dev.md)
+
+## 部署路径
+
+当前推荐的部署形态是前后端分离：
+
+- 后端：FastAPI API 服务
+- 前端：React 静态站点
+
+后端可以通过 `docker compose` 启动，但这不会构建或托管前端。
+React 静态构建入口是：
+
+```powershell
+npm run build:web
+```
+
+部署说明见：
+
+- [docs/deployment.md](docs/deployment.md)
+- [web/README.md](web/README.md)
+
+## 目录
 
 ```text
 crawler_system/
 |-- server/
-|   |-- app/
-|   |   |-- api/              # API 路由
-|   |   |-- core/             # 配置、数据库、生命周期、调度器
-|   |   |-- engine/           # 抓取、解析、清洗、校验流水线
-|   |   |-- models/           # 数据模型
-|   |   |-- repositories/     # 数据访问层
-|   |   |-- schemas/          # 请求/响应模型
-|   |   `-- services/         # 业务服务层
-|   |-- storage/
-|   |   |-- snapshots/        # 页面快照
-|   |   |-- exports/          # 导出目录
-|   |   `-- templates/        # 模板文件存储
-|   |-- data.db
-|   |-- main.py
-|   `-- requirements.txt
+|-- web/
 |-- frontend/
-|   |-- docs/
-|   |-- lib/
-|   |-- test/
-|   `-- pubspec.yaml
+|-- scripts/
+|-- docs/
 |-- docker-compose.yml
 `-- README.md
 ```
-
-## 四、后端能力说明
-
-### 1. 任务管理
-
-任务是整个系统的核心对象，包含：
-
-- 任务名称
-- 起始 URL
-- 解析规则
-- Cron 表达式
-- 启用状态
-- 最近运行状态
-- 最近成功时间
-- 最近错误信息
-
-当前接口：
-
-- `GET /v1/tasks`
-- `GET /v1/tasks/{id}`
-- `POST /v1/tasks`
-- `PUT /v1/tasks/{id}`
-- `DELETE /v1/tasks/{id}`
-- `POST /v1/tasks/{id}/run`
-
-### 2. 采集数据
-
-系统会对采集内容进行处理并保存：
-
-- 原始 HTML 内容
-- 清洗后的正文文本
-- 标题
-- 来源 URL
-- 质量评分
-- 内容哈希
-- 抓取时间
-- 快照路径
-
-相关接口：
-
-- `GET /v1/data`
-- `GET /v1/data/{id}`
-- `GET /v1/data/{id}/snapshot`
-
-### 3. 公告与仪表盘
-
-在采集数据基础上，系统还提供了更贴近业务的“公告视图”和“仪表盘统计”：
-
-- 公告列表和详情
-- 关键词命中
-- 高优先级判断
-- 来源站点分布
-- 近期公告概览
-
-相关接口：
-
-- `GET /v1/notices`
-- `GET /v1/notices/{id}`
-- `GET /v1/notices/{id}/snapshot`
-- `GET /v1/dashboard/overview`
-
-### 4. 日志系统
-
-系统会记录：
-
-- 任务执行完成
-- 任务执行失败
-- 静态抓取失败后回退动态抓取
-- 解析规则异常
-- 快照保存失败
-- 全局异常
-
-相关接口：
-
-- `GET /v1/logs`
-- `GET /v1/logs/summary`
-
-日志摘要目前包含：
-
-- 总日志数
-- `INFO` 数量
-- `WARNING` 数量
-- `ERROR` 数量
-- 出现失败的任务数量
-
-### 5. 模板系统
-
-模板系统用于沉淀常见站点配置，减少重复配置成本。
-
-目前支持：
-
-- 查看模板列表
-- 新建模板
-- 编辑模板
-- 删除模板
-- 记录模板使用次数
-- 记录最近使用时间
-- 从模板直接创建任务
-- 从已有任务反向保存为模板
-
-相关接口：
-
-- `GET /v1/templates/tasks`
-- `POST /v1/templates/tasks`
-- `PUT /v1/templates/tasks/{template_id}`
-- `DELETE /v1/templates/tasks/{template_id}`
-- `POST /v1/templates/tasks/{template_id}/use`
-
-模板当前存储在：
-
-- `server/storage/templates/task_templates.json`
-
-这样设计的好处是：
-
-- 不需要额外数据库迁移
-- 可直接查看模板文件
-- 后续迁移到数据库也很容易
-
-## 五、抓取流程说明
-
-单次任务运行的处理链路如下：
-
-```text
-Task
-  -> Downloader
-  -> Parser
-  -> Cleaner
-  -> Validator
-  -> Deduplicate
-  -> Save
-  -> Snapshot
-```
-
-当前行为说明：
-
-- 优先静态抓取，失败后回退到动态抓取
-- 优先按解析规则解析，失败后回退到 readability
-- 对清洗后的正文做 SHA-256 去重
-- 将原始页面保存为 HTML 快照
-- 全过程写入日志
-
-## 六、前端能力说明
-
-当前 Flutter 控制台已经不是占位骨架，而是具备实际操作价值的管理界面。
-
-目前已经实现：
-
-### 1. 仪表盘
-
-- 今日新增公告数
-- 关键词命中统计
-- 来源站点分布
-- 高价值公告
-- 最近公告
-
-### 2. 公告中心
-
-- 公告列表
-- 公告详情
-- 快照查看
-- 关键词命中展示
-
-### 3. 任务管理
-
-- 任务列表
-- 搜索与筛选
-- 创建 / 编辑 / 删除
-- 启用 / 停用
-- 立即执行
-- 运行状态追踪
-- 自动刷新
-- 最近日志查看
-- 从任务保存为模板
-
-### 4. 全局日志面板
-
-- 日志分页
-- 按任务 ID 筛选
-- 按级别筛选
-- 关键词搜索
-- 错误任务快捷修复入口
-- 日志摘要统计
-
-### 5. 来源站点模板管理
-
-- 模板目录展示
-- 模板新增 / 编辑 / 删除
-- 模板标签
-- 模板使用次数与最近使用时间
-- 一键套用模板创建任务
-
-更详细的前端说明请看：[frontend/README.md](frontend/README.md)
-
-### 6. 登录说明
-
-当前系统带有后端登录接口，启动后会自动创建默认管理员账号（与 `server/app/core/config.py` 中 `Settings` 一致）：
-
-- 用户名：`madao`
-- 初始密码：`666666`
-
-登录成功后会返回会话 token，前端会在浏览器中保存该会话，刷新页面也可以继续保持登录状态。
-
-## 七、本地启动
-
-### 0. Windows 一键启动（推荐）
-
-```powershell
-cd crawler_system
-powershell -ExecutionPolicy Bypass -File .\scripts\dev-up.ps1
-```
-
-该脚本会自动：
-
-- 清理固定端口监听（后端 `8000`、前端 `8093`）
-- 启动后端（`uvicorn`）和前端（`flutter web-server`）
-- 输出最终访问地址
-
-如需自定义端口，可传参：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\dev-up.ps1 -BackendPort 8001 -FrontendPort 8094
-```
-
-一键停止（默认停止 `8000` 和 `8093`）：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\dev-down.ps1
-```
-
-### 1. 启动后端
-
-```bash
-cd server
-python -m venv ..\.venv
-..\.venv\Scripts\python -m pip install -r requirements.txt
-python -m playwright install chromium
-..\.venv\Scripts\python -m uvicorn main:app --host 127.0.0.1 --port 8000
-```
-
-首次启动时，系统会自动：
-
-- 创建 `server/data.db`
-- 建表
-- 创建运行所需目录
-- 启动调度器
-- 在任务表为空时插入示例任务
-- 初始化模板存储文件
-
-### 2. 启动前端
-
-```bash
-cd frontend
-flutter pub get
-flutter run -d chrome
-```
-
-### 3. 自动化测试（可选）
-
-```bash
-cd server
-..\.venv\Scripts\python -m pip install -r requirements-dev.txt
-..\.venv\Scripts\python -m pytest -q
-```
-
-```bash
-cd frontend
-flutter pub get
-flutter analyze
-flutter test
-```
-
-## 八、Docker 启动
-
-在项目根目录执行：
-
-```bash
-docker compose up --build
-```
-
-默认后端地址：
-
-```text
-http://127.0.0.1:8000
-```
-
-## 九、数据与存储位置
-
-- SQLite 数据库：`server/data.db`
-- 页面快照：`server/storage/snapshots`
-- 导出目录：`server/storage/exports`
-- 模板目录：`server/storage/templates`
-
-注意：
-
-- 系统实际使用的数据库是 `crawler_system/server/data.db`
-- 项目根目录外层那个 `data.db` 不是后端默认数据库
-
-## 十、统一响应格式
-
-所有接口统一使用以下响应包裹结构：
-
-```json
-{
-  "code": 0,
-  "message": "success",
-  "data": {}
-}
-```
-
-分页接口统一支持：
-
-```text
-?page=1&page_size=20
-```
-
-## 十一、当前已完成与下一步建议
-
-### 已完成
-
-- 后端任务链路打通
-- 采集数据入库与快照保存
-- 任务状态跟踪
-- 日志系统与日志摘要
-- Flutter 运维控制台
-- 模板管理与模板使用统计
-- 模板与任务双向流转
-- 采集数据 CSV 导出、模板目录搜索与排序
-- 后端 `pytest`（含 HTTP 集成）与前端 `flutter test`（含 `ApiClient` / HTTP 仓库 Mock）
-
-### 建议下一步
-
-- 支持“列表页 -> 详情页”的多页抓取
-- 模板热门度、保存前校验与更丰富的解析测试
-- 更完整的端到端（浏览器）或契约测试
-
-## 十二、适合谁来继续维护
-
-这个项目现在已经比较适合：
-
-- 后端工程师继续补采集能力
-- 前端工程师继续补体验与可视化
-- 业务运营人员通过模板和任务面板直接参与维护
-
-如果你准备继续扩展它，建议优先沿着“模板治理”和“多页抓取”两条线推进。

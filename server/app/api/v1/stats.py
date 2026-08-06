@@ -1,10 +1,14 @@
 from fastapi import APIRouter, Depends
 
-from app.dependencies import get_data_service
+from app.dependencies import get_current_session, get_data_service
 from app.schemas.common import ApiResponse, StatsOverview
 from app.services.data_service import DataService
 
-router = APIRouter(prefix="/stats", tags=["stats"])
+router = APIRouter(
+    prefix="/stats",
+    tags=["stats"],
+    dependencies=[Depends(get_current_session)],
+)
 
 
 @router.get("/overview", response_model=ApiResponse[StatsOverview])
