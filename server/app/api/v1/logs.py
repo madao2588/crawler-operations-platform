@@ -1,10 +1,14 @@
 from fastapi import APIRouter, Depends, Query
 
-from app.dependencies import get_data_service
+from app.dependencies import get_current_session, get_data_service
 from app.schemas.common import ApiResponse, LogRead, LogSummary, PageData
 from app.services.data_service import DataService
 
-router = APIRouter(prefix="/logs", tags=["logs"])
+router = APIRouter(
+    prefix="/logs",
+    tags=["logs"],
+    dependencies=[Depends(get_current_session)],
+)
 
 
 @router.get("", response_model=ApiResponse[PageData[LogRead]])

@@ -5,7 +5,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pharma_bid_monitor_frontend/features/auth/presentation/pages/login_page.dart';
 
 void main() {
-  testWidgets('LoginPage submits and calls onLogin with credentials', (tester) async {
+  testWidgets('LoginPage submits and calls onLogin with credentials',
+      (tester) async {
     await tester.binding.setSurfaceSize(const Size(900, 1600));
     addTearDown(() async {
       await tester.binding.setSurfaceSize(null);
@@ -29,8 +30,8 @@ void main() {
 
     await tester.enterText(find.byType(TextFormField).first, 'tester');
     await tester.enterText(find.byType(TextFormField).at(1), 'secret1234');
-    await tester.ensureVisible(find.text('进入系统'));
-    await tester.tap(find.text('进入系统'));
+    await tester.ensureVisible(find.text('\u8fdb\u5165\u7cfb\u7edf'));
+    await tester.tap(find.text('\u8fdb\u5165\u7cfb\u7edf'));
     await tester.pumpAndSettle();
 
     expect(submittedUser, 'tester');
@@ -38,7 +39,7 @@ void main() {
     expect(submittedAvatar, isNull);
   });
 
-  testWidgets('LoginPage shows default account hint', (tester) async {
+  testWidgets('LoginPage hides backend bootstrap env names', (tester) async {
     await tester.pumpWidget(
       MaterialApp(
         home: LoginPage(
@@ -47,7 +48,13 @@ void main() {
       ),
     );
 
-    expect(find.textContaining('madao'), findsWidgets);
-    expect(find.textContaining('666666'), findsWidgets);
+    expect(
+      find.textContaining('CRAWLER_BOOTSTRAP_ADMIN_USERNAME'),
+      findsNothing,
+    );
+    expect(
+      find.textContaining('CRAWLER_BOOTSTRAP_ADMIN_PASSWORD'),
+      findsNothing,
+    );
   });
 }

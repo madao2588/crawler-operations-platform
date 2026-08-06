@@ -1,9 +1,15 @@
+from __future__ import annotations
+
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, Integer, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.models_base import Base
+
+if TYPE_CHECKING:
+    from app.models.data import CollectedData
 
 
 class Task(Base):
@@ -27,7 +33,7 @@ class Task(Base):
         nullable=False,
         server_default=func.now(),
     )
-    collected_items: Mapped[list["CollectedData"]] = relationship(
+    collected_items: Mapped[list[CollectedData]] = relationship(
         "CollectedData",
         back_populates="task",
         cascade="all, delete-orphan",

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../core/constants/navigation_items.dart';
 import '../../core/network/api_client.dart';
 import '../../core/widgets/async_error_panel.dart';
+import '../../features/dashboard/data/repositories/dashboard_repository.dart';
 import '../../features/dashboard/presentation/pages/dashboard_page.dart';
 import '../../features/keyword_rules/presentation/pages/keyword_rules_page.dart';
 import '../../features/notices/presentation/pages/notices_page.dart';
@@ -12,17 +13,22 @@ import '../../features/source_sites/presentation/pages/source_sites_page.dart';
 import '../../features/system_management/data/models/task_template_models.dart';
 import '../../features/system_management/data/repositories/http_template_repository.dart';
 import '../../features/system_management/presentation/pages/system_management_page.dart';
+import 'app_navigation_intent.dart';
 
 class AppShell extends StatefulWidget {
   final String userName;
   final Uint8List? avatarBytes;
   final Future<void> Function() onLogout;
+  final Future<List<TaskTemplateModel>>? templatesFuture;
+  final DashboardRepository? dashboardRepository;
 
   const AppShell({
     super.key,
     required this.userName,
     required this.avatarBytes,
     required this.onLogout,
+    this.templatesFuture,
+    this.dashboardRepository,
   });
 
   @override
@@ -34,18 +40,67 @@ class _AppShellState extends State<AppShell> {
   TaskTemplateModel? _pendingTemplate;
   late final HttpTemplateRepository _templateRepository;
   late Future<List<TaskTemplateModel>> _templatesFuture;
+  NoticeQuery _noticeQuery = const NoticeQuery();
+  int? _noticeId;
+  SystemManagementTab _systemTab = SystemManagementTab.tasks;
+  String? _systemTaskFilter;
+  String? _systemLogLevel;
+  int? _systemTaskId;
+  int _contentVersion = 0;
 
   @override
   void initState() {
     super.initState();
     _templateRepository = HttpTemplateRepository(apiClient: ApiClient());
-    _templatesFuture = _templateRepository.fetchTaskTemplates();
+    _templatesFuture =
+        widget.templatesFuture ?? _templateRepository.fetchTaskTemplates();
   }
 
   void _openTemplateInTaskManagement(TaskTemplateModel template) {
     setState(() {
       _pendingTemplate = template;
       _selectedIndex = 4;
+      _systemTab = SystemManagementTab.tasks;
+      _systemTaskFilter = null;
+      _systemLogLevel = null;
+      _systemTaskId = null;
+      _contentVersion += 1;
+    });
+  }
+
+  void _handleNavigationIntent(AppNavigationIntent intent) {
+    setState(() {
+      switch (intent.destination) {
+        case AppDestination.notices:
+          _selectedIndex = 1;
+          _noticeQuery = intent.noticeQuery ?? const NoticeQuery();
+          _noticeId = intent.noticeId;
+        case AppDestination.sourceSites:
+          _selectedIndex = 3;
+        case AppDestination.systemManagement:
+          _selectedIndex = 4;
+          _systemTab = intent.systemTab ?? SystemManagementTab.tasks;
+          _systemTaskFilter = intent.taskFilter;
+          _systemLogLevel = intent.logLevel;
+          _systemTaskId = intent.taskId;
+      }
+      _contentVersion += 1;
+    });
+  }
+
+  void _selectNavigationIndex(int index) {
+    setState(() {
+      _selectedIndex = index;
+      if (index == 1) {
+        _noticeQuery = const NoticeQuery();
+        _noticeId = null;
+      } else if (index == 4) {
+        _systemTab = SystemManagementTab.tasks;
+        _systemTaskFilter = null;
+        _systemLogLevel = null;
+        _systemTaskId = null;
+      }
+      _contentVersion += 1;
     });
   }
 
@@ -247,10 +302,16 @@ class _AppShellState extends State<AppShell> {
         child: AnimatedSwitcher(
           duration: const Duration(milliseconds: 240),
           child: KeyedSubtree(
-            key: ValueKey(_selectedIndex),
+            key: ValueKey('$_selectedIndex-$_contentVersion'),
             child: [
-              const DashboardPage(),
-              const NoticesPage(),
+              DashboardPage(
+                repository: widget.dashboardRepository,
+                onNavigate: _handleNavigationIntent,
+              ),
+              NoticesPage(
+                initialQuery: _noticeQuery,
+                initialNoticeId: _noticeId,
+              ),
               const KeywordRulesPage(),
               SourceSitesPage(
                 templates: templates,
@@ -264,6 +325,10 @@ class _AppShellState extends State<AppShell> {
                 onTemplatesChanged: _reloadTemplates,
                 pendingTemplate: _pendingTemplate,
                 onPendingTemplateHandled: _clearPendingTemplate,
+                initialTab: _systemTab,
+                initialTaskFilter: _systemTaskFilter,
+                initialLogLevel: _systemLogLevel,
+                initialTaskId: _systemTaskId,
               ),
             ][_selectedIndex],
           ),
@@ -381,11 +446,7 @@ class _AppShellState extends State<AppShell> {
               minExtendedWidth: 240,
               groupAlignment: -0.95,
               labelType: NavigationRailLabelType.none,
-              onDestinationSelected: (index) {
-                setState(() {
-                  _selectedIndex = index;
-                });
-              },
+              onDestinationSelected: _selectNavigationIndex,
               destinations: navigationItems
                   .map(
                     (item) => NavigationRailDestination(
@@ -513,9 +574,7 @@ class _AppShellState extends State<AppShell> {
                     leading: Icon(item.icon),
                     title: Text(item.label),
                     onTap: () {
-                      setState(() {
-                        _selectedIndex = index;
-                      });
+                      _selectNavigationIndex(index);
                       Navigator.of(context).pop();
                     },
                   ),
@@ -539,7 +598,7 @@ class _AppShellState extends State<AppShell> {
   String _sectionSubtitle(int index) {
     return switch (index) {
       0 => '聚焦核心指标、来源分布与今日动态，先看到系统整体运行面貌。',
-      1 => '把采集结果组织成可浏览的信息流，便于快速筛查高价值公告。',
+      1 => '把采集结果组织成可浏览的信息流，便于快速筛查业务优先公告。',
       2 => '沉淀触发条件与命中逻辑，让规则配置更清晰、更可维护。',
       3 => '用模板管理常见站点与采集蓝图，降低新任务配置门槛。',
       _ => '在一个控制台里完成任务调度、运行诊断、日志排障与模板协作。',

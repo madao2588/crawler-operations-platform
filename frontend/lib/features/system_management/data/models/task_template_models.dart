@@ -133,3 +133,26 @@ class TestTemplateResponse {
     );
   }
 }
+
+class ManualCollectionResult {
+  final String sourceId;
+  final String sourceUrl;
+  final String status;
+  final int noticeId;
+
+  const ManualCollectionResult({
+    required this.sourceId,
+    required this.sourceUrl,
+    required this.status,
+    required this.noticeId,
+  });
+
+  factory ManualCollectionResult.fromJson(Map<String, dynamic> json) {
+    return ManualCollectionResult(
+      sourceId: json['source_id']?.toString() ?? '',
+      sourceUrl: json['source_url']?.toString() ?? '',
+      status: json['status']?.toString() ?? '',
+      noticeId: json['notice_id'] as int? ?? 0,
+    );
+  }
+}

@@ -9,11 +9,31 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./data.db"
     max_retry: int = 3
     timeout: int = 30
+    outbound_proxy_url: str | None = None
+    use_system_proxy: bool = True
+    outbound_no_proxy: str = (
+        "localhost,127.0.0.1,::1,"
+        "service.most.gov.cn,gdstc.gd.gov.cn,kjj.gz.gov.cn,"
+        "www.hp.gov.cn,www.hengqin.gov.cn,kjt.hunan.gov.cn,"
+        "kjj.changsha.gov.cn"
+    )
+    task_stale_minutes: int = 30
     snapshot_dir: str = "storage/snapshots"
     export_dir: str = "storage/exports"
-    default_admin_username: str = "madao"
-    default_admin_password: str = "666666"
+    bootstrap_admin_username: str | None = None
+    bootstrap_admin_password: str | None = None
     session_ttl_days: int = 7
+    cors_allowed_origins: str = (
+        "http://127.0.0.1:3000,"
+        "http://localhost:3000,"
+        "http://127.0.0.1:3010,"
+        "http://localhost:3010"
+    )
+    cors_allowed_origin_regex: str | None = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
+
+    @property
+    def cors_allowed_origins_list(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_allowed_origins.split(",") if origin.strip()]
 
     model_config = SettingsConfigDict(
         env_prefix="CRAWLER_",

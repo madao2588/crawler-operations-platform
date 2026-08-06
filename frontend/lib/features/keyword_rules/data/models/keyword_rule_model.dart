@@ -3,6 +3,7 @@ class KeywordRuleModel {
   final String word;
   final bool isHighPriority;
   final bool isActive;
+  final bool isDefault;
   final String createdAt;
   final String updatedAt;
 
@@ -11,6 +12,7 @@ class KeywordRuleModel {
     required this.word,
     required this.isHighPriority,
     required this.isActive,
+    this.isDefault = false,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -21,6 +23,7 @@ class KeywordRuleModel {
       word: json['word']?.toString() ?? '',
       isHighPriority: json['is_high_priority'] as bool? ?? false,
       isActive: json['is_active'] as bool? ?? false,
+      isDefault: json['is_default'] as bool? ?? false,
       createdAt: json['created_at']?.toString() ?? '',
       updatedAt: json['updated_at']?.toString() ?? '',
     );

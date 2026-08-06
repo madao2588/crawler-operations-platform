@@ -6,3 +6,17 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+server/storage/snapshots/
+web/node_modules/
+web/dist/
+web/coverage/
+*.tsbuildinfo
+.claude/
+.omx/
+artifacts/
+docs/delivery-acceptance.md
+docs/plans/
+docs/superpowers/
+scripts/update_requirements_doc.py
+AGENTS.md
+CLAUDE.md

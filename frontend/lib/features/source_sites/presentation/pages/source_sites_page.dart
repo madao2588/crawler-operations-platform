@@ -1,13 +1,21 @@
 import 'package:flutter/material.dart';
 
+import '../../../../core/network/api_client.dart';
+import '../../../../core/utils/date_formatter.dart';
 import '../../../../core/utils/user_facing_error.dart';
+import '../../../../core/widgets/page_chrome.dart';
+import '../../../system_management/data/models/task_models.dart';
 import '../../../system_management/data/models/task_template_models.dart';
 import '../../../system_management/data/repositories/http_template_repository.dart';
+import '../../../system_management/data/repositories/http_task_repository.dart';
+import '../../../system_management/data/repositories/task_repository.dart';
+import '../template_collection_status.dart';
 
 class SourceSitesPage extends StatefulWidget {
   final ValueChanged<TaskTemplateModel>? onUseTemplate;
   final List<TaskTemplateModel> templates;
   final HttpTemplateRepository templateRepository;
+  final TaskRepository? taskRepository;
   final Future<void> Function() onTemplatesChanged;
 
   const SourceSitesPage({
@@ -15,6 +23,7 @@ class SourceSitesPage extends StatefulWidget {
     this.onUseTemplate,
     required this.templates,
     required this.templateRepository,
+    this.taskRepository,
     required this.onTemplatesChanged,
   });
 
@@ -24,29 +33,67 @@ class SourceSitesPage extends StatefulWidget {
 
 class _SourceSitesPageState extends State<SourceSitesPage> {
   late final TextEditingController _templateSearchController;
-  String _sortKey = 'label';
-  bool _sortAscending = true;
+  final ScrollController _templateListScrollController = ScrollController();
+  ApiClient? _ownedTaskApiClient;
+  late final TaskRepository _taskRepository;
+  String _sortKey = 'usage';
+  bool _sortAscending = false;
+  String? _selectedTag;
+  final Set<String> _usingTemplateIds = {};
+  final Set<String> _deletingTemplateIds = {};
+  final Set<String> _collectingTemplateIds = {};
+  final Set<int> _retryingTaskIds = {};
+  Map<String, _TaskHealthSnapshot> _taskHealthByTemplateId =
+      const <String, _TaskHealthSnapshot>{};
+  String? _taskHealthError;
+  bool _refreshing = false;
+  bool _taskHealthLoading = false;
+  int _taskHealthRequestId = 0;
 
   @override
   void initState() {
     super.initState();
+    if (widget.taskRepository != null) {
+      _taskRepository = widget.taskRepository!;
+    } else {
+      _ownedTaskApiClient = ApiClient();
+      _taskRepository = HttpTaskRepository(apiClient: _ownedTaskApiClient!);
+    }
     _templateSearchController = TextEditingController()
       ..addListener(() {
         if (mounted) {
           setState(() {});
         }
       });
+    _loadTaskHealth();
+  }
+
+  @override
+  void didUpdateWidget(covariant SourceSitesPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.templates != widget.templates) {
+      _loadTaskHealth();
+    }
   }
 
   @override
   void dispose() {
     _templateSearchController.dispose();
+    _templateListScrollController.dispose();
+    _ownedTaskApiClient?.dispose();
     super.dispose();
   }
 
   List<TaskTemplateModel> _visibleTemplates() {
     final q = _templateSearchController.text.trim().toLowerCase();
     final list = List<TaskTemplateModel>.from(widget.templates);
+    final selectedTag = _selectedTag?.toLowerCase();
+    if (selectedTag != null) {
+      list.retainWhere(
+        (template) =>
+            template.tags.any((tag) => tag.toLowerCase() == selectedTag),
+      );
+    }
     if (q.isNotEmpty) {
       list.retainWhere((t) {
         if (t.label.toLowerCase().contains(q)) {
@@ -95,7 +142,115 @@ class _SourceSitesPageState extends State<SourceSitesPage> {
     return list;
   }
 
+  Future<void> _refreshTemplates() async {
+    if (_refreshing) return;
+    setState(() {
+      _refreshing = true;
+    });
+    try {
+      await widget.onTemplatesChanged();
+      await _loadTaskHealth();
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('刷新模板列表失败：${userFacingError(error)}'),
+          backgroundColor: const Color(0xFFB3261E),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _refreshing = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _loadTaskHealth() async {
+    final requestId = ++_taskHealthRequestId;
+    final templateNames = widget.templates
+        .map((template) => template.name.trim())
+        .where((name) => name.isNotEmpty)
+        .toSet();
+    if (templateNames.isEmpty) {
+      if (!mounted || requestId != _taskHealthRequestId) {
+        return;
+      }
+      setState(() {
+        _taskHealthByTemplateId = const <String, _TaskHealthSnapshot>{};
+        _taskHealthError = null;
+        _taskHealthLoading = false;
+      });
+      return;
+    }
+
+    setState(() {
+      _taskHealthLoading = true;
+      _taskHealthError = null;
+    });
+
+    try {
+      final tasks = await _taskRepository.fetchTasksByNames(templateNames);
+      final tasksByName = <String, TaskListItemModel>{
+        for (final task in tasks) task.name.trim(): task,
+      };
+      final healthByTemplateId = <String, _TaskHealthSnapshot>{};
+
+      for (final template in widget.templates) {
+        final task = tasksByName[template.name.trim()];
+        TaskLogItemModel? latestLog;
+        TaskLogItemModel? latestSummaryLog;
+        final lastRunStatus = task?.lastRunStatus?.trim().toLowerCase();
+        if (task != null && lastRunStatus == 'failed') {
+          final page = await _taskRepository.fetchTaskLogs(task.id, pageSize: 1);
+          if (page.items.isNotEmpty) {
+            latestLog = page.items.first;
+          }
+        }
+        if (task != null && lastRunStatus == 'partial') {
+          final page = await _taskRepository.fetchTaskLogs(
+            task.id,
+            pageSize: 1,
+            onlySummary: true,
+          );
+          if (page.items.isNotEmpty) {
+            latestSummaryLog = page.items.first;
+          }
+        }
+        healthByTemplateId[template.id] = _TaskHealthSnapshot(
+          task: task,
+          latestLog: latestLog,
+          latestSummaryLog: latestSummaryLog,
+        );
+      }
+
+      if (!mounted || requestId != _taskHealthRequestId) {
+        return;
+      }
+      setState(() {
+        _taskHealthByTemplateId = healthByTemplateId;
+        _taskHealthError = null;
+        _taskHealthLoading = false;
+      });
+    } catch (error) {
+      if (!mounted || requestId != _taskHealthRequestId) {
+        return;
+      }
+      setState(() {
+        _taskHealthError = userFacingError(error);
+        _taskHealthLoading = false;
+      });
+    }
+  }
+
   Future<void> _useTemplate(TaskTemplateModel template) async {
+    if (_usingTemplateIds.contains(template.id)) return;
+    setState(() {
+      _usingTemplateIds.add(template.id);
+    });
     try {
       await widget.templateRepository.trackTaskTemplateUse(template.id);
       await widget.onTemplatesChanged();
@@ -110,6 +265,154 @@ class _SourceSitesPageState extends State<SourceSitesPage> {
           backgroundColor: const Color(0xFFB3261E),
         ),
       );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _usingTemplateIds.remove(template.id);
+        });
+      }
+    }
+  }
+
+  Future<void> _collectManualSource(TaskTemplateModel template) async {
+    if (_collectingTemplateIds.contains(template.id) ||
+        _usingTemplateIds.contains(template.id) ||
+        _deletingTemplateIds.contains(template.id)) {
+      return;
+    }
+    final formKey = GlobalKey<FormState>();
+    var pendingArticleUrl = '';
+    final articleUrl = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('登记${template.label}文章'),
+        content: Form(
+          key: formKey,
+          child: SizedBox(
+            width: 520,
+            child: TextFormField(
+              autofocus: true,
+              onChanged: (value) {
+                pendingArticleUrl = value;
+              },
+              decoration: const InputDecoration(
+                labelText: '公众号文章链接',
+                hintText: 'https://mp.weixin.qq.com/s/...',
+              ),
+              validator: (value) {
+                final text = value?.trim() ?? '';
+                final uri = Uri.tryParse(text);
+                if (uri == null ||
+                    !{'http', 'https'}.contains(uri.scheme) ||
+                    uri.host.toLowerCase() != 'mp.weixin.qq.com') {
+                  return '请输入 mp.weixin.qq.com 的完整文章链接';
+                }
+                return null;
+              },
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () {
+              if (formKey.currentState?.validate() == true) {
+                Navigator.of(context).pop(pendingArticleUrl.trim());
+              }
+            },
+            child: const Text('采集文章'),
+          ),
+        ],
+      ),
+    );
+    if (articleUrl == null || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _collectingTemplateIds.add(template.id);
+    });
+    try {
+      final result = await widget.templateRepository.collectManualSource(
+        template.id,
+        articleUrl,
+      );
+      await _loadTaskHealth();
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            result.status == 'stored'
+                ? '文章已采集到通知池（编号 ${result.noticeId}）。'
+                : '文章已存在，通知池编号 ${result.noticeId}。',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('公众号文章采集失败：${userFacingError(error)}'),
+          backgroundColor: const Color(0xFFB3261E),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _collectingTemplateIds.remove(template.id);
+        });
+      }
+    }
+  }
+
+  Future<void> _retryTask(
+    TaskTemplateModel template,
+    TaskListItemModel task,
+  ) async {
+    if (_retryingTaskIds.contains(task.id)) {
+      return;
+    }
+    setState(() {
+      _retryingTaskIds.add(task.id);
+    });
+    try {
+      final result = await _taskRepository.runTask(task.id);
+      await _loadTaskHealth();
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            result.status == 'queued'
+                ? '已重新排队执行 ${template.label}。'
+                : '已触发 ${template.label}，当前状态：${result.status}。',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('重试 ${template.label} 失败：${userFacingError(error)}'),
+          backgroundColor: const Color(0xFFB3261E),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _retryingTaskIds.remove(task.id);
+        });
+      }
     }
   }
 
@@ -163,6 +466,11 @@ class _SourceSitesPageState extends State<SourceSitesPage> {
   }
 
   Future<void> _deleteTemplate(TaskTemplateModel template) async {
+    if (_deletingTemplateIds.contains(template.id) ||
+        _usingTemplateIds.contains(template.id) ||
+        _collectingTemplateIds.contains(template.id)) {
+      return;
+    }
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -185,6 +493,9 @@ class _SourceSitesPageState extends State<SourceSitesPage> {
       return;
     }
 
+    setState(() {
+      _deletingTemplateIds.add(template.id);
+    });
     try {
       await widget.templateRepository.deleteTaskTemplate(template.id);
       await widget.onTemplatesChanged();
@@ -204,20 +515,42 @@ class _SourceSitesPageState extends State<SourceSitesPage> {
           backgroundColor: const Color(0xFFB3261E),
         ),
       );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _deletingTemplateIds.remove(template.id);
+        });
+      }
+    }
+  }
+
+  void _selectTag(String tag) {
+    setState(() {
+      _selectedTag = tag;
+    });
+  }
+
+  void _clearFilters() {
+    _templateSearchController.clear();
+    if (_selectedTag != null) {
+      setState(() {
+        _selectedTag = null;
+      });
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final visible = _visibleTemplates();
-    return Padding(
-      padding: const EdgeInsets.all(24),
+    return AppPageFrame(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _SourceSitesHero(
+          _SourceSitesPageHero(
             templates: widget.templates,
             onCreate: () => _openTemplateEditor(),
+            onRefresh: _refreshTemplates,
+            refreshing: _refreshing,
           ),
           const SizedBox(height: 16),
           Expanded(
@@ -243,12 +576,60 @@ class _SourceSitesPageState extends State<SourceSitesPage> {
                           });
                         },
                         onClearSearch: () {
-                          _templateSearchController.clear();
+                          _clearFilters();
+                        },
+                        selectedTag: _selectedTag,
+                        onClearTag: () {
+                          setState(() {
+                            _selectedTag = null;
+                          });
                         },
                         matchCount: visible.length,
                         totalCount: widget.templates.length,
                       ),
                       const SizedBox(height: 12),
+                      if (_taskHealthLoading || _taskHealthError != null) ...[
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 12,
+                          ),
+                          decoration: BoxDecoration(
+                            color: _taskHealthError == null
+                                ? const Color(0xFFEAF3FF)
+                                : const Color(0xFFFFF4E5),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: _taskHealthError == null
+                                  ? const Color(0xFFB8D2F2)
+                                  : const Color(0xFFE8BF87),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(
+                                _taskHealthError == null
+                                    ? Icons.sync
+                                    : Icons.warning_amber_rounded,
+                                color: _taskHealthError == null
+                                    ? const Color(0xFF1E4F8A)
+                                    : const Color(0xFF8A4B00),
+                                size: 18,
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  _taskHealthError == null
+                                      ? '正在同步任务状态和最近日志...'
+                                      : '任务状态加载失败，当前先显示模板配置状态：$_taskHealthError',
+                                  style: Theme.of(context).textTheme.bodyMedium,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
                       Expanded(
                         child: visible.isEmpty
                             ? Card(
@@ -282,127 +663,405 @@ class _SourceSitesPageState extends State<SourceSitesPage> {
                                 ),
                               )
                             : Scrollbar(
+                                controller: _templateListScrollController,
                                 thumbVisibility: true,
                                 child: ListView.separated(
+                                  controller: _templateListScrollController,
                                   itemCount: visible.length,
                                   separatorBuilder: (_, __) =>
                                       const SizedBox(height: 16),
                                   itemBuilder: (context, index) {
                                     final template = visible[index];
-                                    return Card(
-                                      child: Container(
-                                        decoration: BoxDecoration(
-                                          gradient: LinearGradient(
-                                            begin: Alignment.topLeft,
-                                            end: Alignment.bottomRight,
-                                            colors: [
-                                              const Color(0xFF1E4F8A)
-                                                  .withValues(alpha: 0.05),
-                                              Colors.white,
-                                            ],
-                                          ),
-                                        ),
-                                        child: Padding(
-                                          padding: const EdgeInsets.all(20),
-                                          child: Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              Row(
-                                                crossAxisAlignment:
-                                                    CrossAxisAlignment.start,
-                                                children: [
-                                                  Expanded(
-                                                    child: Text(
-                                                      template.label,
+                                    final health =
+                                        _taskHealthByTemplateId[template.id];
+                                    final runtimeStatus =
+                                        resolveSourceSiteRuntimeStatus(
+                                      template: template,
+                                      task: health?.task,
+                                      latestLog: health?.latestLog,
+                                      latestSummaryLog: health?.latestSummaryLog,
+                                    );
+                                    final latestSuccessText =
+                                        _formatLastSuccess(health?.task);
+                                    final usingTemplate =
+                                        _usingTemplateIds.contains(template.id);
+                                    final deletingTemplate =
+                                        _deletingTemplateIds
+                                            .contains(template.id);
+                                    final collectingTemplate =
+                                        _collectingTemplateIds
+                                            .contains(template.id);
+                                    final retryingTask =
+                                        _retryingTaskIds.contains(health?.task?.id);
+                                    final busy = usingTemplate ||
+                                        deletingTemplate ||
+                                        collectingTemplate ||
+                                        retryingTask;
+                                    const cardRadius = BorderRadius.all(
+                                      Radius.circular(12),
+                                    );
+                                    return Semantics(
+                                      button: true,
+                                      label:
+                                          '编辑模板 ${template.label}，${template.description}',
+                                      child: MouseRegion(
+                                        cursor: busy
+                                            ? SystemMouseCursors.basic
+                                            : SystemMouseCursors.click,
+                                        child: Card(
+                                          clipBehavior: Clip.antiAlias,
+                                          child: InkWell(
+                                            key: Key(
+                                              'source-template-card-${template.id}',
+                                            ),
+                                            borderRadius: cardRadius,
+                                            onTap: busy
+                                                ? null
+                                                : () => _openTemplateEditor(
+                                                      template,
+                                                    ),
+                                            focusColor: const Color(0xFF1E4F8A)
+                                                .withValues(alpha: 0.12),
+                                            hoverColor: const Color(0xFF1E4F8A)
+                                                .withValues(alpha: 0.06),
+                                            child: AnimatedContainer(
+                                              duration: const Duration(
+                                                milliseconds: 180,
+                                              ),
+                                              curve: Curves.easeOut,
+                                              decoration: BoxDecoration(
+                                                gradient: LinearGradient(
+                                                  begin: Alignment.topLeft,
+                                                  end: Alignment.bottomRight,
+                                                  colors: [
+                                                    const Color(0xFF1E4F8A)
+                                                        .withValues(
+                                                            alpha: 0.05),
+                                                    Colors.white,
+                                                  ],
+                                                ),
+                                              ),
+                                              child: Padding(
+                                                padding:
+                                                    const EdgeInsets.all(20),
+                                                child: Column(
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment.start,
+                                                  children: [
+                                                    Row(
+                                                      crossAxisAlignment:
+                                                          CrossAxisAlignment
+                                                              .start,
+                                                      children: [
+                                                        Expanded(
+                                                          child: Text(
+                                                            template.label,
+                                                            style: Theme.of(
+                                                                    context)
+                                                                .textTheme
+                                                                .titleLarge,
+                                                          ),
+                                                        ),
+                                                        Wrap(
+                                                          spacing: 8,
+                                                          runSpacing: 8,
+                                                          children:
+                                                              template.tags
+                                                                  .map(
+                                                                    (tag) =>
+                                                                        ActionChip(
+                                                                      key: Key(
+                                                                        'source-template-tag-${template.id}-$tag',
+                                                                      ),
+                                                                      label: Text(
+                                                                          tag),
+                                                                      tooltip:
+                                                                          '按“$tag”筛选模板',
+                                                                      onPressed:
+                                                                          () =>
+                                                                              _selectTag(tag),
+                                                                    ),
+                                                                  )
+                                                                  .toList(),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                    const SizedBox(height: 12),
+                                                    Text(
+                                                      template.description,
                                                       style: Theme.of(context)
                                                           .textTheme
-                                                          .titleLarge,
+                                                          .bodyMedium,
                                                     ),
-                                                  ),
-                                                  Wrap(
-                                                    spacing: 8,
-                                                    runSpacing: 8,
-                                                    children: template.tags
-                                                        .map(
-                                                          (tag) => Chip(
-                                                            label: Text(tag),
+                                                    const SizedBox(height: 12),
+                                                    Container(
+                                                      key: Key(
+                                                        'source-template-status-${template.id}',
+                                                      ),
+                                                      padding: const EdgeInsets
+                                                          .symmetric(
+                                                        horizontal: 12,
+                                                        vertical: 8,
+                                                      ),
+                                                      decoration: BoxDecoration(
+                                                        color: runtimeStatus
+                                                            .backgroundColor,
+                                                        borderRadius:
+                                                            BorderRadius
+                                                                .circular(
+                                                          999,
+                                                        ),
+                                                        border: Border.all(
+                                                          color:
+                                                              runtimeStatus
+                                                                  .borderColor,
+                                                        ),
+                                                      ),
+                                                      child: Row(
+                                                        mainAxisSize:
+                                                            MainAxisSize.min,
+                                                        children: [
+                                                          Icon(
+                                                            runtimeStatus.icon,
+                                                            size: 16,
+                                                            color: runtimeStatus
+                                                                .foregroundColor,
                                                           ),
-                                                        )
-                                                        .toList(),
-                                                  ),
-                                                ],
-                                              ),
-                                              const SizedBox(height: 12),
-                                              Text(
-                                                template.description,
-                                                style: Theme.of(context)
-                                                    .textTheme
-                                                    .bodyMedium,
-                                              ),
-                                              const SizedBox(height: 16),
-                                              _TemplateMetaRow(
-                                                label: '建议任务名',
-                                                value: template.name,
-                                              ),
-                                              _TemplateMetaRow(
-                                                label: '起始地址',
-                                                value: template.startUrl,
-                                              ),
-                                              _TemplateMetaRow(
-                                                label: '定时表达式',
-                                                value: template.cronExpr,
-                                              ),
-                                              _TemplateMetaRow(
-                                                label: '解析规则',
-                                                value: template.parserRules ??
-                                                    '使用可读性兜底解析',
-                                              ),
-                                              _TemplateMetaRow(
-                                                label: '使用情况',
-                                                value:
-                                                    '已使用 ${template.usageCount} 次'
-                                                    '${template.lastUsedAt == null ? '' : ' · 最近使用 ${template.lastUsedAt}'}',
-                                              ),
-                                              const SizedBox(height: 8),
-                                              Wrap(
-                                                spacing: 8,
-                                                runSpacing: 8,
-                                                children: [
-                                                  FilledButton.tonal(
-                                                    onPressed: widget
-                                                                .onUseTemplate ==
-                                                            null
-                                                        ? null
-                                                        : () => _useTemplate(
-                                                              template,
+                                                          const SizedBox(
+                                                            width: 6,
+                                                          ),
+                                                          Text(
+                                                            runtimeStatus.label,
+                                                            key: Key(
+                                                              'source-template-status-label-${template.id}',
                                                             ),
-                                                    child: const Text('使用此模板'),
-                                                  ),
-                                                  OutlinedButton(
-                                                    onPressed: () =>
-                                                        _openTemplateEditor(
-                                                          template,
-                                                        ),
-                                                    child: const Text('编辑'),
-                                                  ),
-                                                  OutlinedButton(
-                                                    onPressed: () =>
-                                                        _deleteTemplate(
-                                                          template,
-                                                        ),
-                                                    style: OutlinedButton
-                                                        .styleFrom(
-                                                      foregroundColor:
-                                                          const Color(
-                                                        0xFFB3261E,
+                                                            style: Theme.of(
+                                                                    context)
+                                                                .textTheme
+                                                                .labelLarge
+                                                                ?.copyWith(
+                                                                  color: runtimeStatus
+                                                                      .foregroundColor,
+                                                                  fontWeight:
+                                                                      FontWeight
+                                                                          .w700,
+                                                                ),
+                                                          ),
+                                                        ],
                                                       ),
                                                     ),
-                                                    child: const Text('删除'),
-                                                  ),
-                                                ],
+                                                    const SizedBox(height: 8),
+                                                    Text(
+                                                      runtimeStatus.note,
+                                                      key: Key(
+                                                        'source-template-status-note-${template.id}',
+                                                      ),
+                                                      style: Theme.of(context)
+                                                          .textTheme
+                                                          .bodySmall
+                                                          ?.copyWith(
+                                                            color: const Color(
+                                                              0xFF556A86,
+                                                            ),
+                                                            height: 1.45,
+                                                          ),
+                                                    ),
+                                                    const SizedBox(height: 12),
+                                                    _TemplateMetaRow(
+                                                      key: Key(
+                                                        'source-template-last-success-${template.id}',
+                                                      ),
+                                                      label: '最近成功',
+                                                      value: latestSuccessText,
+                                                    ),
+                                                    if (runtimeStatus.latestLog !=
+                                                            null &&
+                                                        runtimeStatus.latestLog!
+                                                            .trim()
+                                                            .isNotEmpty)
+                                                      _TemplateMetaRow(
+                                                        key: Key(
+                                                          'source-template-latest-log-${template.id}',
+                                                        ),
+                                                        label: '最新日志',
+                                                        value:
+                                                            runtimeStatus.latestLog!,
+                                                      ),
+                                                    const SizedBox(height: 16),
+                                                    _TemplateMetaRow(
+                                                      label: '建议任务名',
+                                                      value: template.name,
+                                                    ),
+                                                    _TemplateMetaRow(
+                                                      label: '起始地址',
+                                                      value: template.startUrl,
+                                                    ),
+                                                    _TemplateMetaRow(
+                                                      label: '定时表达式',
+                                                      value: template.cronExpr,
+                                                    ),
+                                                    _TemplateMetaRow(
+                                                      label: '解析规则',
+                                                      value: template
+                                                              .parserRules ??
+                                                          '使用可读性兜底解析',
+                                                    ),
+                                                    _TemplateMetaRow(
+                                                      label: '使用情况',
+                                                      value:
+                                                          '已使用 ${template.usageCount} 次'
+                                                          '${template.lastUsedAt == null ? '' : ' · 最近使用 ${template.lastUsedAt}'}',
+                                                    ),
+                                                    const SizedBox(height: 8),
+                                                    Wrap(
+                                                      spacing: 8,
+                                                      runSpacing: 8,
+                                                      children: [
+                                                        if (runtimeStatus.canRetry &&
+                                                            health?.task != null)
+                                                          FilledButton.icon(
+                                                            key: Key(
+                                                              'source-template-retry-${template.id}',
+                                                            ),
+                                                            onPressed: busy
+                                                                ? null
+                                                                : () => _retryTask(
+                                                                      template,
+                                                                      health!.task!,
+                                                                    ),
+                                                            icon: retryingTask
+                                                                ? const SizedBox.square(
+                                                                    dimension: 18,
+                                                                    child:
+                                                                        CircularProgressIndicator(
+                                                                      strokeWidth:
+                                                                          2,
+                                                                    ),
+                                                                  )
+                                                                : const Icon(
+                                                                    Icons.refresh,
+                                                                    size: 18,
+                                                                  ),
+                                                            label: Text(
+                                                              retryingTask
+                                                                  ? '正在重试'
+                                                                  : '重试任务',
+                                                            ),
+                                                          ),
+                                                        if (manualSourceIds
+                                                            .contains(
+                                                                template.id))
+                                                          FilledButton.icon(
+                                                            key: Key(
+                                                              'source-template-collect-${template.id}',
+                                                            ),
+                                                            onPressed: busy
+                                                                ? null
+                                                                : () =>
+                                                                    _collectManualSource(
+                                                                      template,
+                                                                    ),
+                                                            icon:
+                                                                collectingTemplate
+                                                                    ? const SizedBox
+                                                                        .square(
+                                                                        dimension:
+                                                                            18,
+                                                                        child:
+                                                                            CircularProgressIndicator(
+                                                                          strokeWidth:
+                                                                              2,
+                                                                        ),
+                                                                      )
+                                                                    : const Icon(
+                                                                        Icons
+                                                                            .add_link,
+                                                                        size:
+                                                                            18,
+                                                                      ),
+                                                            label: Text(
+                                                              collectingTemplate
+                                                                  ? '正在登记'
+                                                                  : '登记文章链接',
+                                                            ),
+                                                          ),
+                                                        FilledButton.tonal(
+                                                          key: Key(
+                                                            'source-template-use-${template.id}',
+                                                          ),
+                                                          onPressed:
+                                                              widget.onUseTemplate ==
+                                                                          null ||
+                                                                      busy
+                                                                  ? null
+                                                                  : () =>
+                                                                      _useTemplate(
+                                                                        template,
+                                                                      ),
+                                                          child: usingTemplate
+                                                              ? const SizedBox
+                                                                  .square(
+                                                                  dimension: 18,
+                                                                  child:
+                                                                      CircularProgressIndicator(
+                                                                    strokeWidth:
+                                                                        2,
+                                                                  ),
+                                                                )
+                                                              : const Text(
+                                                                  '使用此模板'),
+                                                        ),
+                                                        OutlinedButton(
+                                                          key: Key(
+                                                            'source-template-edit-${template.id}',
+                                                          ),
+                                                          onPressed: busy
+                                                              ? null
+                                                              : () =>
+                                                                  _openTemplateEditor(
+                                                                    template,
+                                                                  ),
+                                                          child:
+                                                              const Text('编辑'),
+                                                        ),
+                                                        OutlinedButton(
+                                                          key: Key(
+                                                            'source-template-delete-${template.id}',
+                                                          ),
+                                                          onPressed: busy
+                                                              ? null
+                                                              : () =>
+                                                                  _deleteTemplate(
+                                                                    template,
+                                                                  ),
+                                                          style: OutlinedButton
+                                                              .styleFrom(
+                                                            foregroundColor:
+                                                                const Color(
+                                                              0xFFB3261E,
+                                                            ),
+                                                          ),
+                                                          child:
+                                                              deletingTemplate
+                                                                  ? const SizedBox
+                                                                      .square(
+                                                                      dimension:
+                                                                          18,
+                                                                      child:
+                                                                          CircularProgressIndicator(
+                                                                        strokeWidth:
+                                                                            2,
+                                                                      ),
+                                                                    )
+                                                                  : const Text(
+                                                                      '删除'),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ],
+                                                ),
                                               ),
-                                            ],
+                                            ),
                                           ),
                                         ),
                                       ),
@@ -410,23 +1069,45 @@ class _SourceSitesPageState extends State<SourceSitesPage> {
                                   },
                                 ),
                               ),
-                            ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
+          ),
         ],
       ),
     );
   }
 }
 
+String _formatLastSuccess(TaskListItemModel? task) {
+  final lastSuccessAt = task?.lastSuccessAt;
+  if (lastSuccessAt == null || lastSuccessAt.trim().isEmpty) {
+    return '暂无成功记录';
+  }
+  return DateFormatter.formatDateTime(lastSuccessAt);
+}
+
+class _TaskHealthSnapshot {
+  final TaskListItemModel? task;
+  final TaskLogItemModel? latestLog;
+  final TaskLogItemModel? latestSummaryLog;
+
+  const _TaskHealthSnapshot({
+    required this.task,
+    required this.latestLog,
+    required this.latestSummaryLog,
+  });
+}
+
 class _TemplateFilterBar extends StatelessWidget {
   final TextEditingController searchController;
   final String sortKey;
   final bool sortAscending;
+  final String? selectedTag;
   final ValueChanged<String> onSortKeyChanged;
   final VoidCallback onToggleAscending;
   final VoidCallback onClearSearch;
+  final VoidCallback onClearTag;
   final int matchCount;
   final int totalCount;
 
@@ -434,9 +1115,11 @@ class _TemplateFilterBar extends StatelessWidget {
     required this.searchController,
     required this.sortKey,
     required this.sortAscending,
+    required this.selectedTag,
     required this.onSortKeyChanged,
     required this.onToggleAscending,
     required this.onClearSearch,
+    required this.onClearTag,
     required this.matchCount,
     required this.totalCount,
   });
@@ -505,8 +1188,14 @@ class _TemplateFilterBar extends StatelessWidget {
             TextButton.icon(
               onPressed: onClearSearch,
               icon: const Icon(Icons.clear, size: 18),
-              label: const Text('清空搜索'),
+              label: const Text('清空筛选'),
             ),
+            if (selectedTag != null)
+              InputChip(
+                label: Text('筛选标签：$selectedTag'),
+                tooltip: '清除标签筛选',
+                onDeleted: onClearTag,
+              ),
             Text(
               '显示 $matchCount / $totalCount',
               style: Theme.of(context).textTheme.bodySmall,
@@ -518,6 +1207,60 @@ class _TemplateFilterBar extends StatelessWidget {
   }
 }
 
+class _SourceSitesPageHero extends StatelessWidget {
+  final List<TaskTemplateModel> templates;
+  final VoidCallback onCreate;
+  final Future<void> Function() onRefresh;
+  final bool refreshing;
+
+  const _SourceSitesPageHero({
+    required this.templates,
+    required this.onCreate,
+    required this.onRefresh,
+    required this.refreshing,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return AppPageHero(
+      title: '来源站点模板',
+      subtitle: '沉淀可复用的采集蓝图，减少重复配置，并把常用来源统一到同一套模板规范里。',
+      primaryChips: const [
+        AppPageHeroChipData.overlay('模板复用'),
+        AppPageHeroChipData.overlay('一键套用'),
+        AppPageHeroChipData.overlay('支持 CRUD'),
+      ],
+      secondaryChips: [
+        AppPageHeroChipData.overlay('模板总数 · ${templates.length}'),
+        const AppPageHeroChipData.overlay('同步任务蓝图'),
+        const AppPageHeroChipData.overlay('记录使用统计'),
+      ],
+      actions: [
+        FilledButton.tonalIcon(
+          onPressed: onCreate,
+          icon: const Icon(Icons.add),
+          label: const Text('新建模板'),
+        ),
+        FilledButton.tonalIcon(
+          onPressed: refreshing
+              ? null
+              : () {
+                  onRefresh();
+                },
+          icon: refreshing
+              ? const SizedBox.square(
+                  dimension: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.refresh),
+          label: Text(refreshing ? '刷新中' : '刷新'),
+        ),
+      ],
+    );
+  }
+}
+
+// ignore: unused_element
 class _SourceSitesHero extends StatelessWidget {
   final List<TaskTemplateModel> templates;
   final VoidCallback onCreate;
@@ -688,6 +1431,7 @@ class _TemplateMetaRow extends StatelessWidget {
   final String value;
 
   const _TemplateMetaRow({
+    super.key,
     required this.label,
     required this.value,
   });
@@ -769,6 +1513,7 @@ class _TemplateEditorDialogState extends State<_TemplateEditorDialog> {
   }
 
   Future<void> _submit() async {
+    if (_submitting || _testing) return;
     if (!_formKey.currentState!.validate()) {
       return;
     }
@@ -830,6 +1575,7 @@ class _TemplateEditorDialogState extends State<_TemplateEditorDialog> {
   }
 
   Future<void> _testTemplate() async {
+    if (_testing || _submitting) return;
     setState(() {
       _submitError = null;
       _testResult = null;

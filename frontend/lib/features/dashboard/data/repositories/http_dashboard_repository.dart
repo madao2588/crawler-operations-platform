@@ -30,6 +30,8 @@ class HttpDashboardRepository implements DashboardRepository {
         keywordHitNotices: 0,
         monitoringSiteCount: 0,
         highPriorityNotices: 0,
+        projectDeclarationNotices: 0,
+        resultPublicationNotices: 0,
       ),
       runtime: DashboardRuntimeModel(
         status: 'unknown',
@@ -41,6 +43,7 @@ class HttpDashboardRepository implements DashboardRepository {
       recentNotices: [],
       keywordHeat: [],
       sourceDistribution: [],
+      projectSignalDistribution: [],
       lastUpdatedAt: null,
     );
   }

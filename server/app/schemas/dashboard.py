@@ -12,6 +12,13 @@ class KeywordHeatItem(BaseModel):
 
 class SourceDistributionItem(BaseModel):
     source_site: str
+    display_name: str
+    notice_count: int = Field(..., ge=0)
+    percentage: float = Field(..., ge=0, le=100)
+
+
+class ProjectSignalItem(BaseModel):
+    label: str
     notice_count: int = Field(..., ge=0)
     percentage: float = Field(..., ge=0, le=100)
 
@@ -21,6 +28,9 @@ class DashboardMetrics(BaseModel):
     keyword_hit_notices: int = Field(..., ge=0)
     monitoring_site_count: int = Field(..., ge=0)
     high_priority_notices: int = Field(..., ge=0)
+    high_quality_notices: int = Field(default=0, ge=0)
+    project_declaration_notices: int = Field(default=0, ge=0)
+    result_publication_notices: int = Field(default=0, ge=0)
 
 
 class DashboardRuntime(BaseModel):
@@ -39,4 +49,5 @@ class DashboardOverview(BaseModel):
     recent_notices: list[NoticeListItem]
     keyword_heat: list[KeywordHeatItem]
     source_distribution: list[SourceDistributionItem]
+    project_signal_distribution: list[ProjectSignalItem] = []
     last_updated_at: datetime | None = None

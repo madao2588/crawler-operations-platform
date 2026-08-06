@@ -52,12 +52,8 @@ class LogRepository:
                     LogEntry.run_summary.is_not(None),
                     LogEntry.message.contains(" summary:"),
                     LogEntry.message.contains("运行摘要"),
-                    func.coalesce(LogEntry.error_stack, "").contains(
-                        '"kind":"run_summary"'
-                    ),
-                    func.coalesce(LogEntry.error_stack, "").contains(
-                        '"kind": "run_summary"'
-                    ),
+                    func.coalesce(LogEntry.error_stack, "").contains('"kind":"run_summary"'),
+                    func.coalesce(LogEntry.error_stack, "").contains('"kind": "run_summary"'),
                 )
             )
         if message_contains:
@@ -78,11 +74,7 @@ class LogRepository:
         statement = select(LogEntry)
         if filters:
             statement = statement.where(*filters)
-        statement = (
-            statement.order_by(LogEntry.id.desc())
-            .offset((page - 1) * page_size)
-            .limit(page_size)
-        )
+        statement = statement.order_by(LogEntry.id.desc()).offset((page - 1) * page_size).limit(page_size)
         result = await self.session.execute(statement)
         return result.scalars().all(), total
 

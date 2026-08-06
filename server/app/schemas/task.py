@@ -1,7 +1,9 @@
 from datetime import datetime
 from enum import IntEnum
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_serializer, field_validator
+
+from app.schemas.serialization import dt_to_utc_iso_z
 
 from app.schemas.parser_rules import validate_parser_rules_str
 
@@ -65,7 +67,22 @@ class TaskRead(TaskBase):
 
     model_config = {"from_attributes": True}
 
+    @field_serializer("last_run_at", "last_success_at", "created_at", when_used="json")
+    def _serialize_times_utc_z(self, value: datetime | None) -> str | None:
+        return dt_to_utc_iso_z(value)
+
 
 class TaskRunPayload(BaseModel):
     task_id: int
     status: str
+    recovered_stale_run: bool = False
+
+
+class RunAllEnabledPayload(BaseModel):
+    """Result of enqueueing a manual run for every enabled task."""
+
+    queued_task_ids: list[int] = Field(default_factory=list)
+    skipped_task_ids: list[int] = Field(default_factory=list)
+    recovered_task_ids: list[int] = Field(default_factory=list)
+    quarantined_task_ids: list[int] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)

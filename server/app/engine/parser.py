@@ -1,10 +1,18 @@
 import json
+import re
 from collections.abc import Mapping
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 from lxml import html as lxml_html
 from readability import Document
+
+from app.utils.notice import (
+    PROJECT_NOTICE_CATEGORIES,
+    PROJECT_NOTICE_IRRELEVANCE_KEYWORDS,
+    PROJECT_NOTICE_METADATA_KINDS,
+    PROJECT_NOTICE_RELEVANCE_CONTEXT_KEYWORDS,
+)
 
 
 def parse_with_rules(html: str, rules: Mapping[str, str]) -> dict[str, str | None]:
@@ -14,13 +22,16 @@ def parse_with_rules(html: str, rules: Mapping[str, str]) -> dict[str, str | Non
         return _parse_list_items(html, list_item_rule, fields_rule)
 
     title_rule = rules.get("title")
+    published_at_rule = rules.get("published_at")
     content_rule = rules.get("content")
 
     title = _extract_text(html, title_rule) if title_rule else None
+    published_at = _extract_text(html, published_at_rule) if published_at_rule else None
     content_html = _extract_html(html, content_rule) if content_rule else None
 
     return {
         "title": title,
+        "published_at": published_at,
         "content_html": content_html,
     }
 
@@ -72,6 +83,67 @@ def parse_with_readability(html: str) -> dict[str, str | None]:
         "title": title.strip() if title else None,
         "content_html": content_html,
     }
+
+
+def extract_embedded_json_content(
+    html: str,
+    *,
+    assignment: str,
+    content_path: str,
+    title_path: str | None = None,
+) -> dict[str, str | None] | None:
+    marker = re.search(
+        rf"""(?:"|')?{re.escape(assignment)}(?:"|')?\s*:\s*""",
+        html,
+    )
+    if marker is None:
+        return None
+    try:
+        payload, _ = json.JSONDecoder().raw_decode(html[marker.end() :].lstrip())
+    except (TypeError, ValueError):
+        return None
+
+    def value_at_path(path: str | None) -> object:
+        current: object = payload
+        if not path:
+            return None
+        for segment in path.split("."):
+            if not isinstance(current, dict):
+                return None
+            current = current.get(segment)
+        return current
+
+    content_value = value_at_path(content_path)
+    if not isinstance(content_value, str) or not content_value.strip():
+        return None
+    title_value = value_at_path(title_path)
+    return {
+        "title": (
+            " ".join(title_value.split())
+            if isinstance(title_value, str) and title_value.strip()
+            else None
+        ),
+        "content_html": content_value.strip(),
+    }
+
+
+def extract_embedded_content_url(
+    html: str,
+    base_url: str,
+    selector: str,
+) -> str | None:
+    css_selector, attribute = _split_selector_and_attr(selector)
+    if not css_selector or not attribute:
+        return None
+    soup = BeautifulSoup(html, "html.parser")
+    node = soup.select_one(css_selector)
+    if node is None:
+        return None
+    raw_url = node.get(attribute)
+    if not isinstance(raw_url, str) or not raw_url.strip():
+        return None
+    absolute = urljoin(base_url, raw_url.strip())
+    return absolute if absolute.startswith(("http://", "https://")) else None
 
 
 def _extract_text(html: str, selector: str) -> str | None:
@@ -141,16 +213,25 @@ def _split_selector_and_attr(selector: str) -> tuple[str, str | None]:
 CRAWL_META_KEYS = frozenset(
     {
         "crawl_mode",
+        "collection_mode",
+        "allowed_hosts",
         "list_item",
         "detail_link",
+        "detail_include_keywords",
+        "detail_required_context_keywords",
+        "detail_exclude_keywords",
         "max_items",
         "same_host_only",
         "list_page_urls",
+        "list_page_urls_only",
         "list_url_template",
         "list_page_from",
         "list_page_to",
         "max_list_pages",
         "list_next_page",
+        "list_json_items",
+        "list_json_url_field",
+        "list_json_title_field",
         "list_delay_ms",
         "detail_retries",
         "detail_retry_backoff_ms",
@@ -159,6 +240,9 @@ CRAWL_META_KEYS = frozenset(
         "detail_delay_ms",
         "request_timeout_sec",
         "fetch_timeout_sec",
+        "force_dynamic_fetch",
+        "dynamic_wait_selector",
+        "prefer_list_title",
         "http_headers",
         "user_agent",
         "http_cookies",
@@ -170,9 +254,14 @@ CRAWL_META_KEYS = frozenset(
         "login_session_key",
         "login_session_ttl_sec",
         "anti_bot_challenge_keywords",
+        "anti_bot_valid_selector",
         "anti_bot_block_status_codes",
         "anti_bot_block_backoff_ms",
         "anti_bot_retry_on_block",
+        "embedded_content_url",
+        "embedded_content_json_assignment",
+        "embedded_content_json_path",
+        "embedded_content_title_path",
         "proxy_server",
         "proxy_url",
         "proxy_username",
@@ -223,9 +312,7 @@ def detail_retry_count(rules: Mapping[str, object] | None) -> int:
     return max(0, min(DETAIL_RETRY_MAX, _coerce_int(rules.get("detail_retries"), 0)))
 
 
-def detail_retry_sleep_seconds(
-    rules: Mapping[str, object] | None, attempt_index: int
-) -> float:
+def detail_retry_sleep_seconds(rules: Mapping[str, object] | None, attempt_index: int) -> float:
     """Backoff before the next detail attempt (exponential, cap 30s)."""
     base_ms = 800
     if rules is not None:
@@ -535,12 +622,81 @@ def anti_bot_challenge_keywords(rules: Mapping[str, object] | None) -> list[str]
     return out or defaults
 
 
-def looks_like_anti_bot_challenge(
-    html: str, rules: Mapping[str, object] | None
+def _string_list(value: object, *, limit: int = 50) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for item in value[:limit]:
+        if isinstance(item, str) and item.strip():
+            out.append(item.strip().lower())
+    return out
+
+
+def _matches_detail_link_filters(
+    match_blob: str,
+    rules: Mapping[str, object],
 ) -> bool:
+    """Apply shared list-link relevance rules to HTML and JSON sources."""
+    normalized = match_blob.lower()
+    include_keywords = _string_list(rules.get("detail_include_keywords"))
+    required_context_keywords = _string_list(
+        rules.get("detail_required_context_keywords")
+    )
+    exclude_keywords = _string_list(rules.get("detail_exclude_keywords"))
+    metadata = rules.get("metadata")
+    metadata_kind = (
+        str(metadata.get("kind") or "").strip().lower()
+        if isinstance(metadata, Mapping)
+        else ""
+    )
+    is_project_notice = (
+        str(rules.get("category") or "").strip() in PROJECT_NOTICE_CATEGORIES
+        or metadata_kind in PROJECT_NOTICE_METADATA_KINDS
+    )
+    if is_project_notice:
+        if not required_context_keywords:
+            required_context_keywords = _string_list(
+                list(PROJECT_NOTICE_RELEVANCE_CONTEXT_KEYWORDS)
+            )
+        exclude_keywords = list(
+            dict.fromkeys(
+                [
+                    *exclude_keywords,
+                    *_string_list(list(PROJECT_NOTICE_IRRELEVANCE_KEYWORDS)),
+                ]
+            )
+        )
+
+    if include_keywords and not any(
+        keyword in normalized for keyword in include_keywords
+    ):
+        return False
+    if required_context_keywords and not any(
+        keyword in normalized for keyword in required_context_keywords
+    ):
+        return False
+    if exclude_keywords and any(
+        keyword in normalized for keyword in exclude_keywords
+    ):
+        return False
+    return True
+
+
+def looks_like_anti_bot_challenge(html: str, rules: Mapping[str, object] | None) -> bool:
     """Heuristic challenge-page detection by configurable keywords."""
     if not html:
         return False
+    valid_selector = (
+        rules.get("anti_bot_valid_selector")
+        if isinstance(rules, Mapping)
+        else None
+    )
+    if isinstance(valid_selector, str) and valid_selector.strip():
+        try:
+            if BeautifulSoup(html, "html.parser").select_one(valid_selector.strip()):
+                return False
+        except Exception:
+            pass
     text = html.lower()[:200_000]
     for kw in anti_bot_challenge_keywords(rules):
         if kw and kw in text:
@@ -603,7 +759,8 @@ def resolve_list_page_urls(start_url: str, rules: Mapping[str, object]) -> list[
             seen.add(u)
             ordered.append(u)
 
-    add(start_url)
+    if rules.get("list_page_urls_only") is not True:
+        add(start_url)
 
     raw_extra = rules.get("list_page_urls")
     if isinstance(raw_extra, list):
@@ -628,9 +785,7 @@ def resolve_list_page_urls(start_url: str, rules: Mapping[str, object]) -> list[
     return ordered
 
 
-def extract_next_list_page_url(
-    html: str, current_list_url: str, rules: Mapping[str, object]
-) -> str | None:
+def extract_next_list_page_url(html: str, current_list_url: str, rules: Mapping[str, object]) -> str | None:
     """Resolve next list-page URL from full HTML (``list_next_page`` selector)."""
     rule = rules.get("list_next_page")
     if not isinstance(rule, str) or not rule.strip():
@@ -689,6 +844,26 @@ def detail_rules_json(rules: Mapping[str, object]) -> str | None:
     return json.dumps(stripped, ensure_ascii=False)
 
 
+def _link_target_for_item(item, link_selector: str):
+    css_sel, attr = _split_selector_and_attr(link_selector)
+    if not css_sel or attr is None:
+        return None, None
+    if css_sel == ":scope":
+        return item, attr
+    return item.select_one(css_sel), attr
+
+
+def _extract_url_candidate(raw_value: str) -> str:
+    value = raw_value.strip()
+    if value.startswith(("http://", "https://", "/", "../", "./")):
+        return value
+
+    match = re.search(r"""["'](?P<url>(?:https?://|/|\.\.?/)[^"']+)["']""", value)
+    if match:
+        return match.group("url").strip()
+    return value
+
+
 def extract_list_follow_urls(
     html: str,
     base_url: str,
@@ -696,10 +871,36 @@ def extract_list_follow_urls(
     *,
     url_cap: int | None = None,
 ) -> list[str]:
+    return [
+        item["url"]
+        for item in extract_list_follow_items(
+            html,
+            base_url,
+            rules,
+            url_cap=url_cap,
+        )
+    ]
+
+
+def extract_list_follow_items(
+    html: str,
+    base_url: str,
+    rules: Mapping[str, object],
+    *,
+    url_cap: int | None = None,
+) -> list[dict[str, str]]:
     """Collect absolute detail URLs from one list page (crawl_mode=list_follow).
 
     ``url_cap`` caps how many new URLs to return this page (for multi-list aggregation).
     """
+    if isinstance(rules.get("list_json_items"), str):
+        return _extract_json_list_follow_items(
+            html,
+            base_url,
+            rules,
+            url_cap=url_cap,
+        )
+
     list_item_rule = rules.get("list_item")
     detail_link_rule = rules.get("detail_link")
     if not isinstance(list_item_rule, str) or not list_item_rule.strip():
@@ -731,32 +932,125 @@ def extract_list_follow_urls(
     if "@" not in link_sel:
         link_sel = f"{link_sel}@href"
 
-    urls: list[str] = []
+    items_out: list[dict[str, str]] = []
     seen: set[str] = set()
     for item in items:
-        if len(urls) >= max_items:
+        if len(items_out) >= max_items:
             break
-        css_sel, attr = _split_selector_and_attr(link_sel)
-        if not css_sel or attr is None:
-            continue
-        target = item.select_one(css_sel)
+        target, attr = _link_target_for_item(item, link_sel)
         if target is None:
             continue
         raw_href = target.get(attr)
         if not raw_href:
             continue
-        href = str(raw_href).strip()
+        href = _extract_url_candidate(str(raw_href))
         if not href or href.startswith(("#", "javascript:", "mailto:")):
             continue
         absolute = urljoin(base_url, href)
+        match_blob = " ".join(
+            [
+                item.get_text(" ", strip=True),
+                target.get_text(" ", strip=True),
+                href,
+                absolute,
+            ]
+        )
+        if not _matches_detail_link_filters(match_blob, rules):
+            continue
         parsed_u = urlparse(absolute)
         if same_host_only and base_host and parsed_u.netloc and parsed_u.netloc != base_host:
             continue
         if absolute not in seen:
             seen.add(absolute)
-            urls.append(absolute)
+            detail: dict[str, str] = {"url": absolute}
+            title = _extract_list_item_title(item, target)
+            if title:
+                detail["title"] = title
+            items_out.append(detail)
 
-    return urls
+    return items_out
+
+
+def _extract_json_list_follow_items(
+    payload_text: str,
+    base_url: str,
+    rules: Mapping[str, object],
+    *,
+    url_cap: int | None,
+) -> list[dict[str, str]]:
+    items_path = str(rules.get("list_json_items") or "").strip()
+    url_field = str(rules.get("list_json_url_field") or "").strip()
+    title_field = str(rules.get("list_json_title_field") or "").strip()
+    if not items_path or not url_field:
+        return []
+    try:
+        payload: object = json.loads(payload_text)
+    except (TypeError, ValueError):
+        return []
+    current = payload
+    for segment in items_path.split("."):
+        if not isinstance(current, dict):
+            return []
+        current = current.get(segment)
+    if not isinstance(current, list):
+        return []
+
+    rules_max = detail_url_limit(rules)
+    if url_cap is not None:
+        try:
+            cap = max(0, int(url_cap))
+        except (TypeError, ValueError):
+            cap = rules_max
+        max_items = min(PER_PAGE_DETAIL_SAFETY, cap)
+    else:
+        max_items = rules_max
+
+    same_host_only = rules.get("same_host_only", True)
+    if isinstance(same_host_only, str):
+        same_host_only = same_host_only.strip().lower() in ("1", "true", "yes", "on")
+    base_host = urlparse(base_url).netloc
+    items_out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for raw_item in current:
+        if len(items_out) >= max_items:
+            break
+        if not isinstance(raw_item, dict):
+            continue
+        raw_url = raw_item.get(url_field)
+        if not isinstance(raw_url, str) or not raw_url.strip():
+            continue
+        absolute = urljoin(base_url, raw_url.strip())
+        title_value = raw_item.get(title_field) if title_field else None
+        title = " ".join(str(title_value or "").split())
+        match_blob = f"{title} {raw_url} {absolute}"
+        if not _matches_detail_link_filters(match_blob, rules):
+            continue
+        parsed_u = urlparse(absolute)
+        if same_host_only and base_host and parsed_u.netloc and parsed_u.netloc != base_host:
+            continue
+        if absolute in seen:
+            continue
+        seen.add(absolute)
+        detail = {"url": absolute}
+        if title:
+            detail["title"] = title
+        items_out.append(detail)
+    return items_out
+
+
+def _extract_list_item_title(item, target) -> str | None:
+    candidates = [
+        target.get("title"),
+        target.get("aria-label"),
+        target.get_text(" ", strip=True),
+        item.get("title"),
+        item.get_text(" ", strip=True),
+    ]
+    for raw in candidates:
+        value = " ".join(str(raw or "").split())
+        if value:
+            return value
+    return None
 
 
 def _derive_list_title(entries: list[dict[str, str]]) -> str:
@@ -774,7 +1068,7 @@ def _derive_list_title(entries: list[dict[str, str]]) -> str:
 def _build_list_content_html(entries: list[dict[str, str]]) -> str:
     blocks: list[str] = []
     for index, entry in enumerate(entries[:20], start=1):
-        parts = [f"<article data-index=\"{index}\">"]
+        parts = [f'<article data-index="{index}">']
         for field_name, value in entry.items():
             label = field_name.replace("_", " ").strip() or "field"
             parts.append(

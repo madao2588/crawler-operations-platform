@@ -27,11 +27,11 @@ function Stop-PortProcesses([int]$Port) {
     return
   }
   foreach ($portPid in $pids) {
-    try {
-      taskkill /PID $portPid /F | Out-Null
+    taskkill /PID $portPid /F | Out-Null
+    if ($LASTEXITCODE -eq 0) {
       Write-Host "Stopped PID $portPid on port $Port"
-    } catch {
-      Write-Warning "Failed to stop PID $portPid on port ${Port}: $($_.Exception.Message)"
+    } else {
+      Write-Warning "Failed to stop PID $portPid on port ${Port}."
     }
   }
 }

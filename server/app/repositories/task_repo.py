@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from datetime import datetime
 
 from sqlalchemy import asc, desc, func, nullsfirst, nullslast, or_, select, update
@@ -23,6 +23,11 @@ class TaskRepository:
         statement = select(Task).where(Task.id == task_id)
         result = await self.session.execute(statement)
         return result.scalar_one_or_none()
+
+    async def get_by_name(self, name: str) -> Task | None:
+        statement = select(Task).where(Task.name == name).order_by(Task.id.asc())
+        result = await self.session.execute(statement)
+        return result.scalars().first()
 
     async def list_paginated(
         self,
@@ -56,14 +61,14 @@ class TaskRepository:
         lr = (last_run or "all").strip().lower()
         if lr == "success":
             filters.append(Task.last_run_status == "success")
+        elif lr == "partial":
+            filters.append(Task.last_run_status == "partial")
         elif lr == "failed":
             filters.append(Task.last_run_status == "failed")
         elif lr == "active":
             filters.append(Task.last_run_status.in_(("queued", "running")))
         elif lr == "never":
-            filters.append(
-                or_(Task.last_run_status.is_(None), Task.last_run_status == "")
-            )
+            filters.append(or_(Task.last_run_status.is_(None), Task.last_run_status == ""))
 
         total_statement = select(func.count()).select_from(Task)
         if filters:
@@ -103,9 +108,42 @@ class TaskRepository:
         return result.scalars().all(), total
 
     async def list_enabled(self) -> Sequence[Task]:
+        statement = select(Task).where(Task.status == int(TaskStatus.ENABLED)).order_by(Task.id.asc())
+        result = await self.session.execute(statement)
+        return result.scalars().all()
+
+    async def quarantine_failed_enabled(self) -> Sequence[Task]:
         statement = (
             select(Task)
-            .where(Task.status == int(TaskStatus.ENABLED))
+            .where(
+                Task.status == int(TaskStatus.ENABLED),
+                Task.last_run_status == "failed",
+            )
+            .order_by(Task.id.asc())
+        )
+        result = await self.session.execute(statement)
+        tasks = result.scalars().all()
+        for task in tasks:
+            task.status = int(TaskStatus.DISABLED)
+        await self.session.commit()
+        for task in tasks:
+            await self.session.refresh(task)
+        return tasks
+
+    async def list_all(self) -> Sequence[Task]:
+        statement = select(Task).order_by(Task.id.asc())
+        result = await self.session.execute(statement)
+        return result.scalars().all()
+
+    async def list_stale_active(self, *, stale_before: datetime) -> Sequence[Task]:
+        status = func.coalesce(Task.last_run_status, "")
+        statement = (
+            select(Task)
+            .where(
+                status.in_(("queued", "running")),
+                Task.last_run_at.is_not(None),
+                Task.last_run_at <= stale_before,
+            )
             .order_by(Task.id.asc())
         )
         result = await self.session.execute(statement)
@@ -134,10 +172,12 @@ class TaskRepository:
                 last_run_at=run_at,
                 last_error_message=None,
             )
+            .returning(Task.id)
         )
         result = await self.session.execute(stmt)
+        claimed_row = result.first()
         await self.session.commit()
-        return (getattr(result, "rowcount", None) or 0) > 0
+        return claimed_row is not None
 
     async def try_mark_running(
         self,
@@ -155,10 +195,35 @@ class TaskRepository:
                 last_run_at=run_at,
                 last_error_message=None,
             )
+            .returning(Task.id)
         )
         result = await self.session.execute(stmt)
+        claimed_row = result.first()
         await self.session.commit()
-        return (getattr(result, "rowcount", None) or 0) > 0
+        return claimed_row is not None
+
+    async def try_promote_queued_to_running(
+        self,
+        task_id: int,
+        *,
+        run_at: datetime,
+    ) -> bool:
+        """Second-chance claim when the task is still ``queued`` (manual run after trigger_now)."""
+        status = func.coalesce(Task.last_run_status, "")
+        stmt = (
+            update(Task)
+            .where(Task.id == task_id, status == "queued")
+            .values(
+                last_run_status="running",
+                last_run_at=run_at,
+                last_error_message=None,
+            )
+            .returning(Task.id)
+        )
+        result = await self.session.execute(stmt)
+        claimed_row = result.first()
+        await self.session.commit()
+        return claimed_row is not None
 
     async def update_run_state(
         self,
@@ -183,12 +248,22 @@ class TaskRepository:
         await self.session.delete(task)
         await self.session.commit()
 
+    async def delete_by_start_urls(self, urls: Collection[str]) -> int:
+        if not urls:
+            return 0
+
+        statement = select(Task).where(Task.start_url.in_(list(urls)))
+        result = await self.session.execute(statement)
+        tasks = result.scalars().all()
+        for task in tasks:
+            await self.session.delete(task)
+        await self.session.commit()
+        return len(tasks)
+
     async def count_all(self) -> int:
         statement = select(func.count()).select_from(Task)
         return await self.session.scalar(statement) or 0
 
     async def count_enabled(self) -> int:
-        statement = select(func.count()).select_from(Task).where(
-            Task.status == int(TaskStatus.ENABLED)
-        )
+        statement = select(func.count()).select_from(Task).where(Task.status == int(TaskStatus.ENABLED))
         return await self.session.scalar(statement) or 0

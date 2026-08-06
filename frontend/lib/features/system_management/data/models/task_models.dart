@@ -47,16 +47,56 @@ class TaskListItemModel {
 class TaskRunResultModel {
   final int taskId;
   final String status;
+  final bool recoveredStaleRun;
 
   const TaskRunResultModel({
     required this.taskId,
     required this.status,
+    required this.recoveredStaleRun,
   });
 
   factory TaskRunResultModel.fromJson(Map<String, dynamic> json) {
     return TaskRunResultModel(
       taskId: json['task_id'] as int? ?? 0,
       status: json['status']?.toString() ?? '',
+      recoveredStaleRun: json['recovered_stale_run'] as bool? ?? false,
+    );
+  }
+}
+
+class RunAllEnabledResultModel {
+  final List<int> queuedTaskIds;
+  final List<int> skippedTaskIds;
+  final List<int> recoveredTaskIds;
+  final List<int> quarantinedTaskIds;
+  final List<String> errors;
+
+  const RunAllEnabledResultModel({
+    required this.queuedTaskIds,
+    required this.skippedTaskIds,
+    required this.recoveredTaskIds,
+    required this.quarantinedTaskIds,
+    required this.errors,
+  });
+
+  factory RunAllEnabledResultModel.fromJson(Map<String, dynamic> json) {
+    return RunAllEnabledResultModel(
+      queuedTaskIds: (json['queued_task_ids'] as List<dynamic>? ?? [])
+          .map((e) => e as int)
+          .toList(),
+      skippedTaskIds: (json['skipped_task_ids'] as List<dynamic>? ?? [])
+          .map((e) => e as int)
+          .toList(),
+      recoveredTaskIds: (json['recovered_task_ids'] as List<dynamic>? ?? [])
+          .map((e) => e as int)
+          .toList(),
+      quarantinedTaskIds:
+          (json['quarantined_task_ids'] as List<dynamic>? ?? [])
+              .map((e) => e as int)
+              .toList(),
+      errors: (json['errors'] as List<dynamic>? ?? [])
+          .map((e) => e.toString())
+          .toList(),
     );
   }
 }
