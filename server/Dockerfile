@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.11-slim@sha256:90744cff8f32887f075c47d747a173ff333e9e98801667af93c357fa9f5e28ff
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
@@ -7,7 +7,6 @@ WORKDIR /app/server
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        curl \
         libnss3 \
         libx11-6 \
         libxcomposite1 \
@@ -30,7 +29,7 @@ RUN apt-get update \
 COPY server/requirements.txt /tmp/requirements.txt
 
 RUN pip install --no-cache-dir -r /tmp/requirements.txt \
-    && playwright install chromium
+    && playwright install --only-shell chromium
 
 COPY server /app/server
 

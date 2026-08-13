@@ -1,0 +1,10 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile.production

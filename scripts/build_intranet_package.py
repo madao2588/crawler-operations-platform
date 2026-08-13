@@ -16,6 +16,7 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SERVER_DIR = REPO_ROOT / "server"
+BUILD_COMPOSE_FILE = REPO_ROOT / "compose.build.yml"
 if str(SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(SERVER_DIR))
 
@@ -195,6 +196,8 @@ def _run(command: list[str], *, cwd: Path) -> None:
 def _build_offline_images(staging: Path, release_version: str) -> list[str]:
     env_file = staging / ".env.production.initial"
     compose_file = staging / "compose.production.yml"
+    build_compose_file = staging / "compose.build.yml"
+    shutil.copy2(BUILD_COMPOSE_FILE, build_compose_file)
     compose_prefix = [
         "docker",
         "compose",
@@ -202,25 +205,31 @@ def _build_offline_images(staging: Path, release_version: str) -> list[str]:
         str(env_file),
         "-f",
         str(compose_file),
+        "-f",
+        str(build_compose_file),
     ]
-    _run([*compose_prefix, "build", "--pull"], cwd=staging)
-    images = [
-        f"new-drug-intelligence-api:{release_version}",
-        f"new-drug-intelligence-web:{release_version}",
-    ]
-    image_dir = staging / "images"
-    image_dir.mkdir(parents=True, exist_ok=True)
-    _run(
-        [
-            "docker",
-            "save",
-            "--output",
-            str(image_dir / "production-images.tar"),
-            *images,
-        ],
-        cwd=staging,
-    )
-    return images
+    try:
+        _run([*compose_prefix, "build", "--pull", "api"], cwd=staging)
+        _run([*compose_prefix, "build", "--pull", "web"], cwd=staging)
+        images = [
+            f"new-drug-intelligence-api:{release_version}",
+            f"new-drug-intelligence-web:{release_version}",
+        ]
+        image_dir = staging / "images"
+        image_dir.mkdir(parents=True, exist_ok=True)
+        _run(
+            [
+                "docker",
+                "save",
+                "--output",
+                str(image_dir / "production-images.tar"),
+                *images,
+            ],
+            cwd=staging,
+        )
+        return images
+    finally:
+        build_compose_file.unlink(missing_ok=True)
 
 
 def _sha256(path: Path) -> str:

@@ -11,6 +11,7 @@ import pytest
 
 from app.core.security import hash_password, verify_password
 from scripts.build_intranet_package import (
+    _build_offline_images,
     generate_env_safe_password,
     prepare_release_database,
     write_production_env,
@@ -102,6 +103,37 @@ def test_production_env_contains_literal_generated_password(tmp_path: Path) -> N
     assert "replace-with" not in content
 
 
+def test_image_builder_uses_temporary_build_override_without_shipping_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "compose.production.yml").write_text("services: {}\n", encoding="utf-8")
+    (tmp_path / ".env.production.initial").write_text(
+        "RELEASE_VERSION=test-release\n",
+        encoding="utf-8",
+    )
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], *, cwd: Path) -> None:
+        assert cwd == tmp_path
+        commands.append(command)
+
+    monkeypatch.setattr("scripts.build_intranet_package._run", fake_run)
+
+    images = _build_offline_images(tmp_path, "test-release")
+
+    assert images == [
+        "new-drug-intelligence-api:test-release",
+        "new-drug-intelligence-web:test-release",
+    ]
+    assert len(commands) == 3
+    assert str(tmp_path / "compose.build.yml") in commands[0]
+    assert commands[0][-3:] == ["build", "--pull", "api"]
+    assert commands[1][-3:] == ["build", "--pull", "web"]
+    assert commands[2][1] == "save"
+    assert not (tmp_path / "compose.build.yml").exists()
+
+
 @pytest.mark.skipif(os.name != "nt", reason="PowerShell deployment script is Windows-specific")
 def test_release_version_sync_preserves_active_configuration(tmp_path: Path) -> None:
     powershell = shutil.which("powershell.exe")
@@ -154,5 +186,10 @@ def test_deploy_script_passes_detached_mode_as_a_literal_compose_argument() -> N
     ).read_text(encoding="utf-8")
 
     assert 'Invoke-Compose -Arguments @("up", "-d", "--no-build"' in deploy
-    assert 'Invoke-Compose -Arguments @("up", "-d", "--remove-orphans")' in deploy
+    assert 'Invoke-Compose -Arguments @("build"' not in deploy
+    assert "[switch]$ForceBuild" not in deploy
+    assert 'Join-Path $PSScriptRoot "verify.ps1"' in deploy
+    assert "docker image inspect" in deploy
+    assert "new-drug-intelligence-api:$releaseVersion" in deploy
+    assert "new-drug-intelligence-web:$releaseVersion" in deploy
     assert "Invoke-Compose up -d" not in deploy
