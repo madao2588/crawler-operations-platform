@@ -56,6 +56,14 @@ npm run delivery:check
 
 正式放入公司内网时，不使用本地开发启动器；按 [内网部署、升级与回滚](intranet-deployment.md) 使用生产 Compose，让 Nginx 同源托管前端并代理 API，只对内网开放一个端口。
 
+生成可直接转交内网运维的离线包：
+
+```powershell
+npm run release:intranet
+```
+
+发布包位于 `artifacts/intranet-package/`，同时生成整个 ZIP 的 `.sha256` 校验文件。包内 `verify.ps1` 校验逐文件清单，`deploy.ps1` 首次初始化配置和数据，`upgrade.ps1` 会先备份并保留活动配置与 `runtime` 数据。
+
 服务每次启动会先创建经过 SQLite 完整性检查的数据库备份；运行期间每天上海时间 03:30 再执行一次备份与清理。默认保留 14 天备份与快照清单、30 天导出文件、90 天运行日志，`.gitkeep` 占位文件不会被清理。
 
 ## 外部来源边界

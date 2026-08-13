@@ -17,6 +17,10 @@ server/backups
 server/storage
 runtime
 artifacts
+seed
+images
+releases
+*.zip
 *.log
 .env
 .env.*

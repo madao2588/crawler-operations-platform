@@ -12,6 +12,12 @@ const reactPackagePath = path.join(repositoryRoot, 'web', 'package.json');
 const devUpPath = path.join(repositoryRoot, 'scripts', 'dev-up.ps1');
 const pythonWrapperPath = path.join(repositoryRoot, 'scripts', 'pythonw.ps1');
 const composePath = path.join(repositoryRoot, 'docker-compose.yml');
+const productionComposePath = path.join(repositoryRoot, 'compose.production.yml');
+const packageBuilderPath = path.join(
+  repositoryRoot,
+  'scripts',
+  'build-intranet-package.ps1',
+);
 test('npm start launches React and keeps explicit Flutter rollback commands', () => {
   assert.equal(existsSync(packagePath), true, 'root package.json must exist');
 
@@ -118,6 +124,24 @@ test('workspace root npm start delegates to crawler_system', () => {
     packageJson.scripts?.['stop:flutter'],
     'npm --prefix ./crawler_system run stop:flutter',
   );
+  assert.equal(
+    packageJson.scripts?.['release:intranet'],
+    'npm --prefix ./crawler_system run release:intranet',
+  );
+});
+
+test('intranet release command uses the reproducible package builder', () => {
+  const packageJson = JSON.parse(readFileSync(packagePath, 'utf8'));
+  assert.equal(
+    packageJson.scripts?.['release:intranet'],
+    'powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/build-intranet-package.ps1',
+  );
+  assert.equal(existsSync(packageBuilderPath), true);
+
+  const compose = readFileSync(productionComposePath, 'utf8');
+  assert.match(compose, /new-drug-intelligence-api:\$\{RELEASE_VERSION:-latest\}/);
+  assert.match(compose, /new-drug-intelligence-web:\$\{RELEASE_VERSION:-latest\}/);
+  assert.match(compose, /CRAWLER_STARTUP_CATCH_UP_ENABLED:/);
 });
 
 test('combined launcher avoids misleading admin and transient log warnings', () => {

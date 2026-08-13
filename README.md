@@ -114,21 +114,18 @@ npm stop
 
 ## 部署路径
 
-当前推荐的部署形态是前后端分离：
-
-- 后端：FastAPI API 服务
-- 前端：React 静态站点
-
-后端可以通过 `docker compose` 启动，但这不会构建或托管前端。
-React 静态构建入口是：
+公司内网推荐使用一体化生产包：Nginx 托管 React 并同源代理 FastAPI，只开放一个 Web 端口。构建包含当前数据、快照、随机首登密码和离线 Docker 镜像的可交付 ZIP：
 
 ```powershell
-npm run build:web
+npm run release:intranet
 ```
+
+产物位于 `artifacts/intranet-package/`。目标机解压后依次执行 `verify.ps1`、`deploy.ps1`；首次安装程序依赖无需联网，采集外部网站仍需要受控的互联网出口。升级时覆盖程序文件并运行 `upgrade.ps1`，已有 `.env.production` 和 `runtime` 不会被覆盖。
 
 部署说明见：
 
 - [docs/deployment.md](docs/deployment.md)
+- [docs/intranet-deployment.md](docs/intranet-deployment.md)
 - [web/README.md](web/README.md)
 
 ## 目录

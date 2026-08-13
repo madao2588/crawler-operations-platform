@@ -1,5 +1,6 @@
 services:
   api:
+    image: new-drug-intelligence-api:${RELEASE_VERSION:-latest}
     build:
       context: .
       dockerfile: server/Dockerfile
@@ -14,6 +15,7 @@ services:
       CRAWLER_USE_SYSTEM_PROXY: ${CRAWLER_USE_SYSTEM_PROXY:-true}
       CRAWLER_OUTBOUND_NO_PROXY: ${CRAWLER_OUTBOUND_NO_PROXY:-localhost,127.0.0.1,::1,service.most.gov.cn,gdstc.gd.gov.cn,kjj.gz.gov.cn,www.hp.gov.cn,www.hengqin.gov.cn,kjt.hunan.gov.cn,kjj.changsha.gov.cn}
       CRAWLER_MAINTENANCE_ENABLED: ${CRAWLER_MAINTENANCE_ENABLED:-true}
+      CRAWLER_STARTUP_CATCH_UP_ENABLED: ${CRAWLER_STARTUP_CATCH_UP_ENABLED:-true}
     volumes:
       - ./runtime/data:/app/server/runtime-data
       - ./runtime/storage:/app/server/storage
@@ -28,6 +30,7 @@ services:
       - crawler_internal
 
   web:
+    image: new-drug-intelligence-web:${RELEASE_VERSION:-latest}
     build:
       context: .
       dockerfile: web/Dockerfile.production
