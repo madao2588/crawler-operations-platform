@@ -1,0 +1,51 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    restart: unless-stopped
+    environment:
+      CRAWLER_DATABASE_URL: sqlite:////app/server/runtime-data/data.db
+      CRAWLER_BOOTSTRAP_ADMIN_USERNAME: ${CRAWLER_BOOTSTRAP_ADMIN_USERNAME:?Set administrator username}
+      CRAWLER_BOOTSTRAP_ADMIN_PASSWORD: ${CRAWLER_BOOTSTRAP_ADMIN_PASSWORD:?Set a strong administrator password}
+      CRAWLER_CORS_ALLOWED_ORIGINS: ${CRAWLER_CORS_ALLOWED_ORIGINS:-}
+      CRAWLER_CORS_ALLOWED_ORIGIN_REGEX: ${CRAWLER_CORS_ALLOWED_ORIGIN_REGEX:-}
+      CRAWLER_OUTBOUND_PROXY_URL: ${CRAWLER_OUTBOUND_PROXY_URL:-}
+      CRAWLER_USE_SYSTEM_PROXY: ${CRAWLER_USE_SYSTEM_PROXY:-true}
+      CRAWLER_OUTBOUND_NO_PROXY: ${CRAWLER_OUTBOUND_NO_PROXY:-localhost,127.0.0.1,::1,service.most.gov.cn,gdstc.gd.gov.cn,kjj.gz.gov.cn,www.hp.gov.cn,www.hengqin.gov.cn,kjt.hunan.gov.cn,kjj.changsha.gov.cn}
+      CRAWLER_MAINTENANCE_ENABLED: ${CRAWLER_MAINTENANCE_ENABLED:-true}
+    volumes:
+      - ./runtime/data:/app/server/runtime-data
+      - ./runtime/storage:/app/server/storage
+      - ./runtime/backups:/app/server/backups
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 8s
+      retries: 5
+      start_period: 40s
+    networks:
+      - crawler_internal
+
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile.production
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${INTRANET_BIND_ADDRESS:-0.0.0.0}:${INTRANET_PORT:-8093}:80"
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - crawler_internal
+
+networks:
+  crawler_internal:
+    driver: bridge

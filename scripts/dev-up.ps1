@@ -179,11 +179,9 @@ if ([string]::IsNullOrWhiteSpace($frontendApiBaseUrl)) {
   throw "Set API_BASE_URL or ensure backend is reachable"
 }
 
-Write-Host "Cleaning existing listeners..."
+Write-Host "Restarting backend while keeping the current frontend available..."
 Stop-PortProcesses -Port $BackendPort
-Stop-PortProcesses -Port $FrontendPort
 Assert-PortFree -Port $BackendPort
-Assert-PortFree -Port $FrontendPort
 
 if ($useFlutterFrontend) {
   if (!(Test-Path $frontendBuildScript)) {
@@ -206,10 +204,6 @@ if ($useFlutterFrontend) {
 
 $backendLog = Prepare-LogFile -Path $backendLog
 $backendErrLog = Prepare-LogFile -Path $backendErrLog
-$frontendLog = Prepare-LogFile -Path $frontendLog
-$frontendErrLog = Prepare-LogFile -Path $frontendErrLog
-$reactFrontendLog = Prepare-LogFile -Path $reactFrontendLog
-$reactFrontendErrLog = Prepare-LogFile -Path $reactFrontendErrLog
 
 $backendProc = $null
 $frontendProc = $null
@@ -220,6 +214,17 @@ try {
   $backendProc = Start-Process -FilePath "powershell" -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $backendCommand) -WindowStyle Hidden -PassThru -RedirectStandardOutput $backendLog -RedirectStandardError $backendErrLog
 
   Wait-ForHttpOk -Url "http://127.0.0.1:$BackendPort/health"
+
+  Write-Host "Backend is healthy. Switching frontend..."
+  Stop-PortProcesses -Port $FrontendPort
+  Assert-PortFree -Port $FrontendPort
+  if ($useFlutterFrontend) {
+    $frontendLog = Prepare-LogFile -Path $frontendLog
+    $frontendErrLog = Prepare-LogFile -Path $frontendErrLog
+  } else {
+    $reactFrontendLog = Prepare-LogFile -Path $reactFrontendLog
+    $reactFrontendErrLog = Prepare-LogFile -Path $reactFrontendErrLog
+  }
 
   Write-Host "Starting frontend ($FrontendMode) on http://127.0.0.1:$FrontendPort ..."
   if ($useFlutterFrontend) {
@@ -258,7 +263,9 @@ try {
   Stop-LaunchedProcess -Process $frontendProc
   Stop-LaunchedProcess -Process $backendProc
   Stop-PortProcesses -Port $BackendPort
-  Stop-PortProcesses -Port $FrontendPort
+  if ($null -ne $frontendProc) {
+    Stop-PortProcesses -Port $FrontendPort
+  }
   Write-LogTail -Label "Backend error log" -Path $backendErrLog
   Write-LogTail -Label "Backend output log" -Path $backendLog
   Write-LogTail -Label "Frontend error log" -Path $(if ($useFlutterFrontend) { $frontendErrLog } else { $reactFrontendErrLog })

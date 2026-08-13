@@ -27,6 +27,7 @@ interface NoticeRecord {
   ai_summary: string | null
   review_status: string
   is_archived: boolean
+  is_focused?: boolean
   remark: string | null
   task_id: number
 }
@@ -119,6 +120,16 @@ describe('NoticesPage', () => {
     expect(screen.getByRole('region', { name: '公告结果' })).toHaveAttribute('data-scroll-region', 'list')
     const detailPanel = await screen.findByRole('region', { name: '公告详情' })
     expect(within(detailPanel).getByRole('heading', { name: 'xanthine oxidoreductase 最新竞品研究' })).toBeInTheDocument()
+    expect(within(detailPanel).getByText('采集完整度 82')).toHaveAttribute(
+      'title',
+      '采集完整度：根据标题、正文长度、乱码和结构完整性计算，不代表公告重要性',
+    )
+    const originalLink = within(detailPanel).getByRole('link', { name: '查看原文' })
+    const snapshotButton = within(detailPanel).getByRole('button', { name: '查看采集快照' })
+    expect(originalLink).toHaveClass('primary-action', 'notice-original-action')
+    expect(originalLink).toHaveAttribute('target', '_blank')
+    expect(snapshotButton).toHaveClass('secondary-action', 'notice-snapshot-action')
+    expect(originalLink.compareDocumentPosition(snapshotButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('syncs filters to the url and allows source or keyword drilling', async () => {
@@ -197,6 +208,121 @@ describe('NoticesPage', () => {
     })
   })
 
+  it('offers a persistent shortcut for notices published today with keyword matches', async () => {
+    const fetcher = createMockFetcher()
+    window.history.replaceState(null, '', '/notices?month=2026-08')
+
+    renderWithProviders(fetcher)
+
+    const shortcut = await screen.findByRole('button', { name: '今日发布命中' })
+    expect(shortcut).toHaveAttribute('aria-pressed', 'false')
+
+    await userEvent.click(shortcut)
+    await waitFor(() => {
+      expect(window.location.search).toContain('business_today=true')
+      expect(window.location.search).toContain('keyword_hit=true')
+      expect(window.location.search).not.toContain('captured_today')
+      expect(window.location.search).not.toContain('month=')
+    })
+    expect(shortcut).toHaveAttribute('aria-pressed', 'true')
+
+    await userEvent.click(shortcut)
+    await waitFor(() => {
+      expect(window.location.search).not.toContain('business_today')
+      expect(window.location.search).not.toContain('keyword_hit')
+    })
+    expect(shortcut).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('filters notices published this week and clears conflicting date filters', async () => {
+    const fetcher = createMockFetcher()
+    window.history.replaceState(
+      null,
+      '',
+      '/notices?month=2026-08&captured_today=true&business_today=true',
+    )
+
+    renderWithProviders(fetcher)
+
+    const shortcut = await screen.findByRole('button', { name: '本周发布' })
+    expect(shortcut).toHaveAttribute('aria-pressed', 'false')
+
+    await userEvent.click(shortcut)
+    await waitFor(() => {
+      expect(window.location.search).toContain('business_week=true')
+      expect(window.location.search).not.toContain('business_today')
+      expect(window.location.search).not.toContain('captured_today')
+      expect(window.location.search).not.toContain('month=')
+    })
+    expect(shortcut).toHaveAttribute('aria-pressed', 'true')
+    expect(await screen.findAllByText('本周发布')).toHaveLength(2)
+    expect(screen.getByRole('button', { name: /全部月份/ })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    )
+
+    await userEvent.click(shortcut)
+    await waitFor(() => {
+      expect(window.location.search).not.toContain('business_week')
+    })
+    expect(shortcut).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('shows the full publication year and omits meaningless midnight time on cards', async () => {
+    const historicalNotice: NoticeRecord = {
+      ...baseNotices[0],
+      id: 404,
+      title: '2023年历史项目申报通知',
+      source_url: 'https://example.com/nmpa/404',
+      published_at: '2023-08-22T00:00:00+08:00',
+      captured_at: '2026-08-07T09:15:00+08:00',
+    }
+    const fetcher = createMockFetcher({ notices: [historicalNotice, baseNotices[0]] })
+    window.history.replaceState(null, '', '/notices')
+
+    renderWithProviders(fetcher)
+
+    const card = await screen.findByRole('article', { name: /2023年历史项目申报通知/ })
+    expect(within(card).getByText('2023/08/22')).toBeInTheDocument()
+    expect(within(card).getByText('历史补采')).toBeInTheDocument()
+    expect(within(card).queryByText(/08\/22 00:00/)).not.toBeInTheDocument()
+
+    const regularCard = await screen.findByRole('article', { name: /2026年创新药项目申报通知/ })
+    expect(within(regularCard).queryByText('历史补采')).not.toBeInTheDocument()
+  })
+
+  it('jumps directly to a requested page and clamps out-of-range values', async () => {
+    const notices = Array.from({ length: 45 }, (_, index) => ({
+      ...baseNotices[index % baseNotices.length],
+      id: index + 1,
+      title: `分页公告 ${index + 1}`,
+      source_url: `https://example.com/notices/${index + 1}`,
+    }))
+    const fetcher = createMockFetcher({ notices })
+    window.history.replaceState(null, '', '/notices')
+
+    renderWithProviders(fetcher)
+
+    const pageInput = await screen.findByRole('spinbutton', { name: '跳转页码' })
+    await userEvent.clear(pageInput)
+    await userEvent.type(pageInput, '3')
+    await userEvent.click(screen.getByRole('button', { name: '前往指定页' }))
+
+    expect(await screen.findByText('分页公告 41')).toBeInTheDocument()
+    expect(await screen.findByRole('spinbutton', { name: '跳转页码' })).toHaveValue(3)
+    expect(screen.getByText('/ 3 页')).toBeInTheDocument()
+
+    const currentPageInput = await screen.findByRole('spinbutton', { name: '跳转页码' })
+    await userEvent.clear(currentPageInput)
+    await userEvent.type(currentPageInput, '99')
+    await userEvent.click(screen.getByRole('button', { name: '前往指定页' }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('spinbutton', { name: '跳转页码' })).toHaveValue(3)
+    })
+    expect(fetcher.calls.listPages).toContain(3)
+  })
+
   it('keeps older months available without increasing the page height', async () => {
     const fetcher = createMockFetcher({
       months: [
@@ -228,6 +354,68 @@ describe('NoticesPage', () => {
     const detailPanel = await screen.findByRole('region', { name: '公告详情' })
     expect(within(detailPanel).getByText('发布日期')).toBeInTheDocument()
     expect(within(detailPanel).getByText('采集时间')).toBeInTheDocument()
+  })
+
+  it('marks a notice as important from the card without opening its detail', async () => {
+    const fetcher = createMockFetcher()
+    window.history.replaceState(null, '', '/notices')
+
+    renderWithProviders(fetcher)
+
+    const noticeCard = await screen.findByRole('article', {
+      name: /2026年创新药项目申报通知/,
+    })
+    await userEvent.click(within(noticeCard).getByRole('button', { name: '标记重点关注' }))
+
+    await waitFor(() => {
+      expect(fetcher.calls.patchReview.at(-1)?.body).toMatchObject({ review_status: '重点关注' })
+    })
+    expect(window.location.search).not.toContain('notice_id=')
+  })
+
+  it('filters notices by important status from the persistent quick filter', async () => {
+    const fetcher = createMockFetcher({
+      notices: [
+        baseNotices[0],
+        { ...baseNotices[1], review_status: '重点关注' },
+      ],
+    })
+    window.history.replaceState(null, '', '/notices')
+
+    renderWithProviders(fetcher)
+
+    await userEvent.click(await screen.findByRole('button', { name: '只看重点关注' }))
+
+    await waitFor(() => {
+      expect(window.location.search).toContain('review_status=%E9%87%8D%E7%82%B9%E5%85%B3%E6%B3%A8')
+    })
+    expect(await screen.findByRole('article', { name: /xanthine oxidoreductase/ })).toBeInTheDocument()
+    expect(screen.queryByRole('article', { name: /2026年创新药项目申报通知/ })).not.toBeInTheDocument()
+  })
+
+  it('removes important status from the detail drawer', async () => {
+    const focusedDetail = { ...baseDetail, review_status: '重点关注' }
+    const fetcher = createMockFetcher({
+      notices: [{ ...baseNotices[0], review_status: '重点关注' }],
+      detail: focusedDetail,
+    })
+    window.history.replaceState(
+      null,
+      '',
+      '/notices?review_status=%E9%87%8D%E7%82%B9%E5%85%B3%E6%B3%A8&notice_id=101',
+    )
+
+    renderWithProviders(fetcher)
+
+    const detailPanel = await screen.findByRole('region', { name: '公告详情' })
+    await userEvent.click(within(detailPanel).getByRole('button', { name: '取消重点关注' }))
+
+    await waitFor(() => {
+      expect(fetcher.calls.patchReview.at(-1)?.body).toMatchObject({ review_status: '待关注' })
+    })
+    expect(await screen.findByText('没有符合条件的公告')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /全部公告\s*0/ })).toBeInTheDocument()
+    expect(screen.getByText('已取消重点关注')).toBeInTheDocument()
   })
 
   it('retries month loading without blocking the notice list', async () => {
@@ -278,6 +466,24 @@ describe('NoticesPage', () => {
     expect(screen.queryByRole('button', { name: /归档公告/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '已跟进' })).not.toBeInTheDocument()
   })
+
+  it('lets a regular user keep a personal focus without changing review status', async () => {
+    const fetcher = createMockFetcher()
+    window.history.replaceState(null, '', '/notices')
+
+    renderWithProviders(fetcher, false)
+
+    const noticeCard = await screen.findByRole('article', {
+      name: /2026年创新药项目申报通知/,
+    })
+    await userEvent.click(within(noticeCard).getByRole('button', { name: '加入我的关注' }))
+
+    await waitFor(() => expect(fetcher.calls.personalFocus).toEqual(['PUT']))
+    expect(fetcher.calls.patchReview).toHaveLength(0)
+    expect(await screen.findByText('已加入我的关注')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '只看我的关注' }))
+    await waitFor(() => expect(window.location.search).toContain('focused_only=true'))
+  })
 })
 
 function renderWithProviders(fetcher: typeof fetch, canManage = true) {
@@ -291,18 +497,20 @@ function renderWithProviders(fetcher: typeof fetch, canManage = true) {
 }
 
 function createMockFetcher(options: MockFetchOptions = {}) {
-  const notices = options.notices ?? baseNotices
+  let notices = [...(options.notices ?? baseNotices)]
   const months = options.months ?? [
     { month: '2026-08', count: 2 },
     { month: '2026-07', count: notices.some((item) => item.id === 303) ? 1 : 0 },
   ]
-  const detail = options.detail ?? {
+  let detail = options.detail ?? {
     ...baseDetail,
     ...(baseNotices.find((item) => item.id === 101) ?? {}),
   }
   const calls = {
     patchReview: [] as Array<{ noticeId: number; body: unknown }>,
     monthLoads: 0,
+    listPages: [] as number[],
+    personalFocus: [] as string[],
   }
 
   const fetcher: typeof fetch & { calls: typeof calls } = Object.assign(
@@ -312,11 +520,14 @@ function createMockFetcher(options: MockFetchOptions = {}) {
       const url = new URL(rawUrl, 'http://localhost')
       const path = url.pathname
       const pageSize = Number(url.searchParams.get('page_size') ?? '20')
+      const page = Number(url.searchParams.get('page') ?? '1')
       const highPriority = readBool(url.searchParams.get('high_priority'))
       const keywordHit = readBool(url.searchParams.get('keyword_hit'))
       const keyword = url.searchParams.get('keyword')
       const sourceSite = url.searchParams.get('source_site')
       const month = url.searchParams.get('month')
+      const reviewStatus = url.searchParams.get('review_status')
+      const focusedOnly = readBool(url.searchParams.get('focused_only'))
 
       if (path === '/v1/notices/source-sites') {
         return jsonResponse([
@@ -340,6 +551,8 @@ function createMockFetcher(options: MockFetchOptions = {}) {
           if (sourceSite && item.source_site !== sourceSite) return false
           if (keyword && !`${item.title} ${item.summary}`.includes(keyword)) return false
           if (month && businessMonth(item) !== month) return false
+          if (reviewStatus && item.review_status !== reviewStatus) return false
+          if (focusedOnly === true && item.is_focused !== true) return false
           return true
         }).length
         return jsonResponse({ items: notices.slice(0, 1), total, page: 1, page_size: 1 })
@@ -352,13 +565,17 @@ function createMockFetcher(options: MockFetchOptions = {}) {
           if (sourceSite && item.source_site !== sourceSite) return false
           if (keyword && !`${item.title} ${item.summary}`.includes(keyword)) return false
           if (month && businessMonth(item) !== month) return false
+          if (reviewStatus && item.review_status !== reviewStatus) return false
+          if (focusedOnly === true && item.is_focused !== true) return false
           return true
         })
+        calls.listPages.push(page)
+        const start = (page - 1) * pageSize
         return jsonResponse({
-          items: filtered,
+          items: filtered.slice(start, start + pageSize),
           total: filtered.length,
-          page: 1,
-          page_size: 20,
+          page,
+          page_size: pageSize,
         })
       }
 
@@ -378,14 +595,38 @@ function createMockFetcher(options: MockFetchOptions = {}) {
       }
 
       if (path === '/v1/notices/101/review') {
+        const body = init?.body ? JSON.parse(String(init.body)) : {}
         calls.patchReview.push({
           noticeId: 101,
-          body: init?.body ? JSON.parse(String(init.body)) : undefined,
+          body,
         })
-        return delayedJsonResponse({
+        detail = {
           ...detail,
-          is_archived: true,
-        })
+          review_status: body.review_status ?? detail.review_status,
+          is_archived: body.is_archived ?? detail.is_archived,
+          remark: body.remark ?? detail.remark,
+        }
+        notices = notices.map((item) =>
+          item.id === 101
+            ? {
+                ...item,
+                review_status: detail.review_status,
+                is_archived: detail.is_archived,
+                remark: detail.remark,
+              }
+            : item,
+        )
+        return delayedJsonResponse(detail)
+      }
+
+      if (path === '/v1/notices/101/focus') {
+        const focused = init?.method === 'PUT'
+        calls.personalFocus.push(init?.method ?? 'GET')
+        detail = { ...detail, is_focused: focused }
+        notices = notices.map((item) =>
+          item.id === 101 ? { ...item, is_focused: focused } : item,
+        )
+        return delayedJsonResponse(detail)
       }
 
       if (path === '/v1/notices/101/snapshot') {

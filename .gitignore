@@ -14,6 +14,9 @@ web/coverage/
 .claude/
 .omx/
 artifacts/
+backups/
+runtime/
+.env.production
 docs/delivery-acceptance.md
 docs/plans/
 docs/superpowers/

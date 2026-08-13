@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 import app.engine.downloader as downloader
+from app.utils.url_security import UnsafeTargetError
 
 
 def _settings(**overrides: object) -> SimpleNamespace:
@@ -36,6 +37,23 @@ def test_resolve_outbound_proxy_prefers_explicit_task_proxy(
         "username": "u",
         "password": "p",
     }
+
+
+def test_explicit_task_proxy_overrides_configured_no_proxy_for_remote_site(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        downloader,
+        "settings",
+        _settings(outbound_no_proxy="localhost,127.0.0.1,service.most.gov.cn"),
+    )
+
+    resolved = downloader.resolve_outbound_proxy(
+        "https://service.most.gov.cn/kjjh_tztg/",
+        {"server": "http://working-proxy.example:8080"},
+    )
+
+    assert resolved == {"server": "http://working-proxy.example:8080"}
 
 
 def test_resolve_outbound_proxy_uses_configured_proxy_before_windows_proxy(
@@ -133,3 +151,41 @@ async def test_fetch_static_passes_resolved_proxy_to_httpx(
 
     assert html == "<html>ok</html>"
     assert captured["proxy"] == "http://127.0.0.1:7897"
+
+
+@pytest.mark.asyncio
+async def test_fetch_static_rejects_private_redirect_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeResponse:
+        text = "<html>ok</html>"
+        history = [object()]
+        url = "http://169.254.169.254/latest/meta-data"
+
+        def raise_for_status(self) -> None:
+            return None
+
+    class FakeClient:
+        def __init__(self, **_kwargs: object) -> None:
+            return None
+
+        async def __aenter__(self) -> "FakeClient":
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def get(self, _url: str, *, cookies: object = None) -> FakeResponse:
+            _ = cookies
+            return FakeResponse()
+
+    monkeypatch.setattr(downloader, "settings", _settings())
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(
+        downloader,
+        "assert_safe_outbound_url",
+        lambda url: url if "example.com" in url else (_ for _ in ()).throw(UnsafeTargetError("blocked")),
+    )
+
+    with pytest.raises(UnsafeTargetError, match="blocked"):
+        await downloader.fetch_static("https://example.com/notices")

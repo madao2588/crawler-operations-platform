@@ -101,6 +101,19 @@ PROJECT_DECLARATION_ENABLED_TEMPLATE_IDS = frozenset(
     }
 )
 
+# Curated official pages prove that a fixed source exposes each Requirement 1
+# information type even when the current rolling list has no publication of that
+# type. These references are validation evidence only; they are not inserted as
+# fresh announcements and do not affect normal collection counts.
+PROJECT_SIGNAL_CAPABILITY_EVIDENCE = {
+    "most_project_declaration": {
+        "结果公示": {
+            "url": "https://service.most.gov.cn/kjjh_tztg_all/20211209/4758.html",
+            "title": "关于国家重点研发计划“储能与智能电网技术”重点专项2021年度拟立项项目安排公示的通知",
+        }
+    }
+}
+
 
 def _project_parser_rules(
     *,
@@ -111,6 +124,11 @@ def _project_parser_rules(
     detail_link: str = "a@href",
     list_page_urls: list[str] | None = None,
     list_page_urls_only: bool = False,
+    list_url_template: str | None = None,
+    list_page_from: int = 1,
+    list_page_to: int = 1,
+    max_list_pages: int | None = None,
+    max_items: int = 20,
     list_json_items: str | None = None,
     list_json_url_field: str | None = None,
     list_json_title_field: str | None = None,
@@ -132,8 +150,8 @@ def _project_parser_rules(
         ),
         "detail_exclude_keywords": list(PROJECT_NOTICE_IRRELEVANCE_KEYWORDS),
         "same_host_only": True,
-        "max_items": 20,
-        "max_list_pages": max(1, len(list_page_urls or [])),
+        "max_items": max_items,
+        "max_list_pages": max_list_pages or max(1, len(list_page_urls or [])),
         "detail_retries": 1,
         "detail_retry_policy": "transient",
         "request_timeout_sec": 45,
@@ -150,6 +168,10 @@ def _project_parser_rules(
         rules["list_page_urls"] = list_page_urls
     if list_page_urls_only:
         rules["list_page_urls_only"] = True
+    if list_url_template:
+        rules["list_url_template"] = list_url_template
+        rules["list_page_from"] = list_page_from
+        rules["list_page_to"] = list_page_to
     if list_json_items:
         rules["list_json_items"] = list_json_items
     if list_json_url_field:
@@ -178,6 +200,11 @@ MOST_PROJECT_DECLARATION_PARSER_RULES = _project_parser_rules(
         "https://service.most.gov.cn/kjjh_tztg/",
         "https://service.most.gov.cn/sbtz_new/",
     ],
+    list_url_template="https://service.most.gov.cn/kjjh_tztg/index_{page}.html",
+    list_page_from=2,
+    list_page_to=10,
+    max_list_pages=11,
+    max_items=110,
     list_item="td.table_gkgs_title",
     detail_link="div@onclick",
     title="css:h1.article__title",

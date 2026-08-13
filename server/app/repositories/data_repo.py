@@ -1,8 +1,9 @@
+from collections import defaultdict
 from collections.abc import Sequence
 from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import and_, case, desc, func, literal, or_, select
+from sqlalchemy import and_, case, desc, false, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.data import CollectedData
@@ -18,7 +19,9 @@ from app.utils.notice import (
     PROJECT_NOTICE_TASK_KEYWORDS,
     PROJECT_PROCESS_SIGNAL_KEYWORDS,
     PROJECT_RESULT_SIGNAL_KEYWORD_GROUPS,
+    PROJECT_RESULT_IRRELEVANCE_KEYWORDS,
     PROJECT_RESULT_SIGNAL_KEYWORDS,
+    extract_source_site,
 )
 
 
@@ -109,12 +112,15 @@ class DataRepository:
         review_status: str | None = None,
         archived: bool | None = None,
         captured_today: bool | None = None,
+        business_today: bool | None = None,
+        business_week: bool | None = None,
         month: str | None = None,
         source_site: str | None = None,
         keyword_hit: bool | None = None,
         high_priority: bool | None = None,
         high_quality: bool | None = None,
         project_signal: str | None = None,
+        data_ids: set[int] | None = None,
         enabled_only: bool = False,
         include_disabled_history: bool = False,
         active_keywords_for_sort: list[str] | None = None,
@@ -129,12 +135,15 @@ class DataRepository:
             review_status=review_status,
             archived=archived,
             captured_today=captured_today,
+            business_today=business_today,
+            business_week=business_week,
             month=month,
             source_site=source_site,
             keyword_hit=keyword_hit,
             high_priority=high_priority,
             high_quality=high_quality,
             project_signal=project_signal,
+            data_ids=data_ids,
             enabled_only=enabled_only,
             include_disabled_history=include_disabled_history,
             active_keywords_for_filter=active_keywords_for_filter,
@@ -189,11 +198,14 @@ class DataRepository:
         review_status: str | None = None,
         archived: bool | None = None,
         captured_today: bool | None = None,
+        business_today: bool | None = None,
+        business_week: bool | None = None,
         source_site: str | None = None,
         keyword_hit: bool | None = None,
         high_priority: bool | None = None,
         high_quality: bool | None = None,
         project_signal: str | None = None,
+        data_ids: set[int] | None = None,
         enabled_only: bool = False,
         include_disabled_history: bool = False,
         active_keywords_for_filter: list[str] | None = None,
@@ -205,11 +217,14 @@ class DataRepository:
             review_status=review_status,
             archived=archived,
             captured_today=captured_today,
+            business_today=business_today,
+            business_week=business_week,
             source_site=source_site,
             keyword_hit=keyword_hit,
             high_priority=high_priority,
             high_quality=high_quality,
             project_signal=project_signal,
+            data_ids=data_ids,
             enabled_only=enabled_only,
             include_disabled_history=include_disabled_history,
             active_keywords_for_filter=active_keywords_for_filter,
@@ -274,29 +289,67 @@ class DataRepository:
             enabled_only=enabled_only,
             include_disabled_history=include_disabled_history,
         )
-        source_site = _source_site_expression()
-        notice_count = func.count(CollectedData.id)
         statement = (
             select(
-                source_site.label("source_site"),
+                CollectedData.source_url,
                 Task.name.label("task_name"),
-                notice_count.label("notice_count"),
             )
             .select_from(CollectedData)
             .join(Task, Task.id == CollectedData.task_id)
         )
         if filters:
             statement = statement.where(*filters)
-        statement = statement.group_by(source_site, Task.name)
         rows = (await self.session.execute(statement)).all()
+        counts: defaultdict[tuple[str, str], int] = defaultdict(int)
+        for row in rows:
+            counts[(extract_source_site(str(row.source_url)), str(row.task_name))] += 1
         return [
-            (
-                str(row.source_site),
-                str(row.task_name),
-                int(row.notice_count),
-            )
-            for row in rows
+            (source_site, task_name, notice_count)
+            for (source_site, task_name), notice_count in sorted(counts.items())
         ]
+
+    async def aggregate_dashboard_metrics(
+        self,
+        *,
+        active_keywords: list[str],
+        high_priority_keywords: list[str],
+    ) -> dict[str, int]:
+        filters, _ = _notice_filters(
+            enabled_only=True,
+            include_disabled_history=True,
+        )
+        start, end = _shanghai_business_day_utc_bounds()
+        business_date = _notice_business_date_expression()
+        expressions = {
+            "today_new_notices": and_(
+                business_date >= start,
+                business_date < end,
+            ),
+            "keyword_hit_notices": _contains_any(
+                _notice_keyword_blob(),
+                _normalized_keywords(active_keywords),
+            ),
+            "high_priority_notices": _contains_any(
+                _notice_keyword_blob(),
+                _normalized_keywords(high_priority_keywords),
+            ),
+            "high_quality_notices": CollectedData.quality_score >= 60,
+            "project_declaration_notices": _project_signal_expression("申报通知"),
+            "result_publication_notices": _project_signal_expression("结果公示"),
+            "other_project_notices": _project_signal_expression("其他项目线索"),
+        }
+        columns = [
+            func.coalesce(func.sum(case((expression, 1), else_=0)), 0).label(name)
+            for name, expression in expressions.items()
+        ]
+        statement = (
+            select(*columns)
+            .select_from(CollectedData)
+            .join(Task, Task.id == CollectedData.task_id)
+            .where(*filters)
+        )
+        row = (await self.session.execute(statement)).mappings().one()
+        return {name: int(row[name]) for name in expressions}
 
     async def aggregate_keyword_hits(
         self,
@@ -549,12 +602,18 @@ def _contains_all_groups(blob, keyword_groups: tuple[tuple[str, ...], ...]):
 
 
 def _project_result_signal_expression(blob):
-    return or_(
-        _contains_any(
+    return and_(
+        ~_contains_any(
             blob,
-            _normalized_keywords(list(PROJECT_RESULT_SIGNAL_KEYWORDS)),
+            _normalized_keywords(list(PROJECT_RESULT_IRRELEVANCE_KEYWORDS)),
         ),
-        _contains_all_groups(blob, PROJECT_RESULT_SIGNAL_KEYWORD_GROUPS),
+        or_(
+            _contains_any(
+                blob,
+                _normalized_keywords(list(PROJECT_RESULT_SIGNAL_KEYWORDS)),
+            ),
+            _contains_all_groups(blob, PROJECT_RESULT_SIGNAL_KEYWORD_GROUPS),
+        ),
     )
 
 
@@ -574,6 +633,10 @@ def _project_signal_expression(project_signal: str):
         _normalized_keywords(list(PROJECT_DECLARATION_SIGNAL_KEYWORDS)),
     )
     title_result_expression = _project_result_signal_expression(title_blob)
+    title_result_excluded_expression = _contains_any(
+        title_blob,
+        _normalized_keywords(list(PROJECT_RESULT_IRRELEVANCE_KEYWORDS)),
+    )
     title_process_expression = _contains_any(
         title_blob,
         _normalized_keywords(list(PROJECT_PROCESS_SIGNAL_KEYWORDS)),
@@ -585,23 +648,29 @@ def _project_signal_expression(project_signal: str):
     supporting_result_expression = _project_result_signal_expression(
         supporting_blob
     )
-    result_expression = or_(
-        title_result_expression,
-        and_(
-            ~title_result_expression,
-            ~title_declaration_expression,
-            ~title_process_expression,
-            supporting_result_expression,
+    result_expression = and_(
+        ~title_result_excluded_expression,
+        or_(
+            title_result_expression,
+            and_(
+                ~title_result_expression,
+                ~title_declaration_expression,
+                ~title_process_expression,
+                supporting_result_expression,
+            ),
         ),
     )
-    declaration_expression = or_(
-        and_(~title_result_expression, title_declaration_expression),
-        and_(
-            ~title_result_expression,
-            ~title_declaration_expression,
-            ~title_process_expression,
-            ~supporting_result_expression,
-            supporting_declaration_expression,
+    declaration_expression = and_(
+        ~title_result_excluded_expression,
+        or_(
+            and_(~title_result_expression, title_declaration_expression),
+            and_(
+                ~title_result_expression,
+                ~title_declaration_expression,
+                ~title_process_expression,
+                ~supporting_result_expression,
+                supporting_declaration_expression,
+            ),
         ),
     )
     if project_signal == "结果公示":
@@ -659,12 +728,15 @@ def _notice_filters(
     review_status: str | None = None,
     archived: bool | None = None,
     captured_today: bool | None = None,
+    business_today: bool | None = None,
+    business_week: bool | None = None,
     month: str | None = None,
     source_site: str | None = None,
     keyword_hit: bool | None = None,
     high_priority: bool | None = None,
     high_quality: bool | None = None,
     project_signal: str | None = None,
+    data_ids: set[int] | None = None,
     enabled_only: bool = False,
     include_disabled_history: bool = False,
     active_keywords_for_filter: list[str] | None = None,
@@ -689,6 +761,16 @@ def _notice_filters(
             CollectedData.fetch_time < end,
         )
         filters.append(captured_on_today if captured_today else ~captured_on_today)
+    if business_today is not None:
+        start, end = _shanghai_business_day_utc_bounds()
+        business_date = _notice_business_date_expression()
+        business_on_today = and_(business_date >= start, business_date < end)
+        filters.append(business_on_today if business_today else ~business_on_today)
+    if business_week is not None:
+        start, end = _shanghai_business_week_utc_bounds()
+        business_date = _notice_business_date_expression()
+        business_in_week = and_(business_date >= start, business_date < end)
+        filters.append(business_in_week if business_week else ~business_in_week)
     if month:
         start, end = _shanghai_business_month_utc_bounds(month)
         business_date = _notice_business_date_expression()
@@ -717,6 +799,9 @@ def _notice_filters(
         filters.append(_project_signal_expression(project_signal))
         requires_task_join = True
 
+    if data_ids is not None:
+        filters.append(CollectedData.id.in_(data_ids) if data_ids else false())
+
     if enabled_only and not include_disabled_history:
         filters.append(
             or_(
@@ -733,6 +818,15 @@ def _shanghai_business_day_utc_bounds() -> tuple[datetime, datetime]:
     business_date = datetime.now(timezone.utc).astimezone(SHANGHAI_TIMEZONE).date()
     start_local = datetime.combine(business_date, time.min, tzinfo=SHANGHAI_TIMEZONE)
     end_local = start_local + timedelta(days=1)
+    return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
+
+
+def _shanghai_business_week_utc_bounds() -> tuple[datetime, datetime]:
+    now_local = datetime.now(timezone.utc).astimezone(SHANGHAI_TIMEZONE)
+    start_date = now_local.date() - timedelta(days=now_local.weekday())
+    end_date = now_local.date() + timedelta(days=1)
+    start_local = datetime.combine(start_date, time.min, tzinfo=SHANGHAI_TIMEZONE)
+    end_local = datetime.combine(end_date, time.min, tzinfo=SHANGHAI_TIMEZONE)
     return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
 
 

@@ -284,6 +284,26 @@ async def test_project_signal_filter_uses_title_first_and_covers_official_result
             "验收工作完成后将另行公示验收结果。",
             "acceptance-process-with-result-body",
         ),
+        (
+            "广东省2026年第五批拟更名高新技术企业名单公示",
+            "现将拟更名企业名单予以公示。",
+            "renamed-enterprise-list",
+        ),
+        (
+            "广东省异地搬迁高新技术企业名单公示",
+            "现将异地搬迁企业名单予以公示。",
+            "relocated-enterprise-list",
+        ),
+        (
+            "创新药品医疗器械目录公示",
+            "现将目录内容予以公示。",
+            "product-directory",
+        ),
+        (
+            "琴澳健康小妙想作品征集活动获奖名单公示",
+            "现将活动获奖名单予以公示。",
+            "creative-works-award",
+        ),
     ]
     async_session.add_all(
         [
@@ -338,6 +358,10 @@ async def test_project_signal_filter_uses_title_first_and_covers_official_result
     assert {item.title for item in other.items} == {
         "关于开展2026年度科技项目验收工作的通知",
         "关于开展2026年度专项项目验收工作的通知",
+        "广东省2026年第五批拟更名高新技术企业名单公示",
+        "广东省异地搬迁高新技术企业名单公示",
+        "创新药品医疗器械目录公示",
+        "琴澳健康小妙想作品征集活动获奖名单公示",
     }
     assert {item.project_signal for item in declarations.items} == {"申报通知"}
     assert {item.project_signal for item in results.items} == {"结果公示"}
@@ -593,6 +617,202 @@ async def test_captured_today_uses_shanghai_midnight_as_utc_half_open_range(
 
 
 @pytest.mark.asyncio
+async def test_business_today_prefers_published_date_and_falls_back_to_capture_date(
+    async_session,
+    monkeypatch,
+) -> None:
+    task = Task(
+        name="项目申报业务日期筛选",
+        start_url="https://business-date.example/root",
+        cron_expr="0 8 * * *",
+        status=1,
+    )
+    async_session.add(task)
+    await async_session.flush()
+
+    start = datetime(2026, 7, 28, 16, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 7, 29, 16, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(
+        data_repo_module,
+        "_shanghai_business_day_utc_bounds",
+        lambda: (start, end),
+        raising=False,
+    )
+    async_session.add_all(
+        [
+            CollectedData(
+                task_id=task.id,
+                title="今日发布但早先采集",
+                content_text="项目申报",
+                source_url="https://business-date.example/published-today",
+                quality_score=10,
+                content_hash="business-published-today",
+                category="项目申报",
+                published_at=start,
+                fetch_time=start - timedelta(days=3),
+            ),
+            CollectedData(
+                task_id=task.id,
+                title="历史发布但今日补采",
+                content_text="项目申报",
+                source_url="https://business-date.example/captured-today",
+                quality_score=10,
+                content_hash="business-captured-today",
+                category="项目申报",
+                published_at=start - timedelta(days=3),
+                fetch_time=start,
+            ),
+            CollectedData(
+                task_id=task.id,
+                title="缺少发布日期且今日采集",
+                content_text="项目申报",
+                source_url="https://business-date.example/fallback-today",
+                quality_score=10,
+                content_hash="business-fallback-today",
+                category="项目申报",
+                published_at=None,
+                fetch_time=end - timedelta(microseconds=1),
+            ),
+            CollectedData(
+                task_id=task.id,
+                title="缺少发布日期且历史采集",
+                content_text="项目申报",
+                source_url="https://business-date.example/fallback-old",
+                quality_score=10,
+                content_hash="business-fallback-old",
+                category="项目申报",
+                published_at=None,
+                fetch_time=start - timedelta(microseconds=1),
+            ),
+        ]
+    )
+    await async_session.commit()
+
+    repo = DataRepository(async_session)
+    today, today_total = await repo.list_paginated(
+        page=1,
+        page_size=20,
+        enabled_only=True,
+        business_today=True,
+    )
+    outside, outside_total = await repo.list_paginated(
+        page=1,
+        page_size=20,
+        enabled_only=True,
+        business_today=False,
+    )
+
+    assert today_total == 2
+    assert {item.title for item in today} == {
+        "今日发布但早先采集",
+        "缺少发布日期且今日采集",
+    }
+    assert outside_total == 2
+    assert {item.title for item in outside} == {
+        "历史发布但今日补采",
+        "缺少发布日期且历史采集",
+    }
+
+
+@pytest.mark.asyncio
+async def test_business_week_prefers_published_date_and_falls_back_to_capture_date(
+    async_session,
+    monkeypatch,
+) -> None:
+    task = Task(
+        name="本周业务日期筛选",
+        start_url="https://business-week.example/root",
+        cron_expr="0 8 * * *",
+        status=1,
+    )
+    async_session.add(task)
+    await async_session.flush()
+
+    start = datetime(2026, 8, 9, 16, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 8, 12, 16, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(
+        data_repo_module,
+        "_shanghai_business_week_utc_bounds",
+        lambda: (start, end),
+        raising=False,
+    )
+    async_session.add_all(
+        [
+            CollectedData(
+                task_id=task.id,
+                title="本周发布但早先采集",
+                content_text="项目申报",
+                source_url="https://business-week.example/published-this-week",
+                quality_score=10,
+                content_hash="business-published-this-week",
+                category="项目申报",
+                published_at=start,
+                fetch_time=start - timedelta(days=5),
+            ),
+            CollectedData(
+                task_id=task.id,
+                title="上周发布但本周补采",
+                content_text="项目申报",
+                source_url="https://business-week.example/captured-this-week",
+                quality_score=10,
+                content_hash="business-captured-this-week",
+                category="项目申报",
+                published_at=start - timedelta(microseconds=1),
+                fetch_time=start,
+            ),
+            CollectedData(
+                task_id=task.id,
+                title="缺少发布日期且本周采集",
+                content_text="项目申报",
+                source_url="https://business-week.example/fallback-this-week",
+                quality_score=10,
+                content_hash="business-fallback-this-week",
+                category="项目申报",
+                published_at=None,
+                fetch_time=end - timedelta(microseconds=1),
+            ),
+            CollectedData(
+                task_id=task.id,
+                title="本周范围结束后的公告",
+                content_text="项目申报",
+                source_url="https://business-week.example/after-this-week",
+                quality_score=10,
+                content_hash="business-after-this-week",
+                category="项目申报",
+                published_at=end,
+                fetch_time=end,
+            ),
+        ]
+    )
+    await async_session.commit()
+
+    repo = DataRepository(async_session)
+    this_week, this_week_total = await repo.list_paginated(
+        page=1,
+        page_size=20,
+        enabled_only=True,
+        business_week=True,
+    )
+    outside, outside_total = await repo.list_paginated(
+        page=1,
+        page_size=20,
+        enabled_only=True,
+        business_week=False,
+    )
+
+    assert this_week_total == 2
+    assert {item.title for item in this_week} == {
+        "本周发布但早先采集",
+        "缺少发布日期且本周采集",
+    }
+    assert outside_total == 2
+    assert {item.title for item in outside} == {
+        "上周发布但本周补采",
+        "本周范围结束后的公告",
+    }
+
+
+@pytest.mark.asyncio
 async def test_notice_endpoint_forwards_new_optional_filters() -> None:
     class SpyNoticeService:
         def __init__(self) -> None:
@@ -612,6 +832,8 @@ async def test_notice_endpoint_forwards_new_optional_filters() -> None:
         review_status=None,
         archived=None,
         captured_today=True,
+        business_today=True,
+        business_week=True,
         month="2026-08",
         source_site="alpha.example",
         keyword_hit=True,
@@ -629,13 +851,17 @@ async def test_notice_endpoint_forwards_new_optional_filters() -> None:
         "review_status": None,
         "archived": None,
         "captured_today": True,
+        "business_today": True,
+        "business_week": True,
         "month": "2026-08",
         "source_site": "alpha.example",
         "keyword_hit": True,
         "high_priority": True,
         "high_quality": True,
-        "project_signal": "申报通知",
-    }
+            "project_signal": "申报通知",
+            "focused_only": None,
+            "user_id": None,
+        }
 
 
 def test_notice_endpoint_rejects_invalid_project_signal(

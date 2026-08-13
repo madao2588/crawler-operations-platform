@@ -88,12 +88,12 @@ class AuthRepository:
     async def create_session(
         self,
         user: User,
-        token: str,
+        token_hash: str,
         expires_at: datetime,
     ) -> UserSession:
         session = UserSession(
             user_id=user.id,
-            token=token,
+            token=token_hash,
             expires_at=expires_at,
             last_used_at=datetime.now(UTC),
         )
@@ -102,8 +102,8 @@ class AuthRepository:
         await self.session.refresh(session)
         return session
 
-    async def get_session_by_token(self, token: str) -> UserSession | None:
-        statement = select(UserSession).where(UserSession.token == token)
+    async def get_session_by_token(self, token_hash: str) -> UserSession | None:
+        statement = select(UserSession).where(UserSession.token == token_hash)
         result = await self.session.execute(statement)
         return result.scalar_one_or_none()
 
@@ -113,10 +113,16 @@ class AuthRepository:
         await self.session.refresh(session_obj)
         return session_obj
 
-    async def delete_session_by_token(self, token: str) -> None:
-        await self.session.execute(delete(UserSession).where(UserSession.token == token))
+    async def delete_session_by_token(self, token_hash: str) -> None:
+        await self.session.execute(delete(UserSession).where(UserSession.token == token_hash))
         await self.session.commit()
 
     async def delete_sessions_by_user_id(self, user_id: int) -> None:
         await self.session.execute(delete(UserSession).where(UserSession.user_id == user_id))
         await self.session.commit()
+
+    async def delete_expired_sessions(self, *, expired_before: datetime) -> int:
+        statement = delete(UserSession).where(UserSession.expires_at < expired_before)
+        result = await self.session.execute(statement)
+        await self.session.commit()
+        return int(result.rowcount or 0)

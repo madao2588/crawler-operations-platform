@@ -107,10 +107,14 @@ export class ApiClient {
       })
     } catch (error) {
       if (timeoutController.signal.aborted && !options.signal?.aborted) {
-        throw new ApiError('请求超时，请检查服务状态后重试。')
+        throw new ApiError(
+          `请求超时（${method} ${url.pathname}，超过 ${Math.round(this.timeoutMs / 1000)} 秒）：后端仍在处理或暂时无响应，请稍后重试。`,
+        )
       }
       if (error instanceof ApiError) throw error
-      throw new ApiError('无法连接服务器，请检查后端是否已启动。')
+      throw new ApiError(
+        `无法连接后端（${method} ${url.pathname}）：服务未响应。请确认 npm start 正在运行后重试。`,
+      )
     } finally {
       window.clearTimeout(timeout)
     }

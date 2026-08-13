@@ -444,3 +444,32 @@ async def test_collect_manual_source_accepts_only_fixed_wechat_source_and_host(a
             "most_project_declaration",
             article_url,
         )
+
+
+@pytest.mark.asyncio
+async def test_collect_manual_source_rejects_allowed_host_that_resolves_private_ip(async_session, monkeypatch) -> None:
+    class FakeCrawlService:
+        async def collect_manual_url(self, _task_id: int, _url: str):
+            raise AssertionError("should not collect unsafe manual URL")
+
+    task_repo = TaskRepository(async_session)
+    log_repo = LogRepository(async_session)
+    service = TaskService(
+        task_repo=task_repo,
+        log_repo=log_repo,
+        crawl_service=FakeCrawlService(),  # type: ignore[arg-type]
+    )
+    await service.ensure_required_source_tasks()
+
+    def fake_assert_safe_outbound_url(_url: str) -> str:
+        from app.utils.url_security import UnsafeTargetError
+
+        raise UnsafeTargetError("Resolved address 10.0.0.10 for host mp.weixin.qq.com is not public")
+
+    monkeypatch.setattr("app.services.task_service.assert_safe_outbound_url", fake_assert_safe_outbound_url)
+
+    with pytest.raises(ValueError, match="not public"):
+        await service.collect_manual_source(
+            "wechat_k_innovation",
+            "https://mp.weixin.qq.com/s/private-hop",
+        )

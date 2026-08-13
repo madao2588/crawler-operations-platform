@@ -32,14 +32,25 @@ async def login(
     try:
         session_data = await service.login(payload)
         return ApiResponse(data=session_data)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
 
 
 @router.get("/me", response_model=ApiResponse[AuthSessionRead])
 async def me(
+    include_avatar: bool = True,
     session_data: AuthSessionRead = Depends(get_current_session),
 ) -> ApiResponse[AuthSessionRead]:
+    if not include_avatar:
+        session_data = session_data.model_copy(
+            update={
+                "user": session_data.user.model_copy(
+                    update={"avatar_base64": None},
+                )
+            }
+        )
     return ApiResponse(data=session_data)
 
 

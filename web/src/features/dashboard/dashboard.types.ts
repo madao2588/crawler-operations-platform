@@ -15,6 +15,27 @@ export interface DashboardRuntime {
   scheduledJobs: number
 }
 
+export interface DashboardCollectionHealth {
+  status: 'healthy' | 'warning' | 'error' | 'idle' | string
+  monitoredTaskCount: number
+  failedTaskCount: number
+  partialTaskCount: number
+  staleTaskCount: number
+  lastSuccessAt: string | null
+  failedSources: string[]
+  partialSources: string[]
+  issues: DashboardCollectionIssue[]
+}
+
+export interface DashboardCollectionIssue {
+  taskId: number
+  taskName: string
+  status: 'failed' | 'partial' | 'stale' | string
+  reason: string
+  isStale: boolean
+  lastSuccessAt: string | null
+}
+
 export interface NoticeListItem {
   id: number
   title: string
@@ -56,6 +77,7 @@ export interface ProjectSignalItem {
 export interface DashboardOverview {
   metrics: DashboardMetrics
   runtime: DashboardRuntime
+  collectionHealth: DashboardCollectionHealth
   highValueNotices: NoticeListItem[]
   recentNotices: NoticeListItem[]
   keywordHeat: KeywordHeatItem[]

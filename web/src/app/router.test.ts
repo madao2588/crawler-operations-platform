@@ -9,9 +9,12 @@ describe('app router', () => {
   it('round-trips dashboard notice filters through the URL', () => {
     const url = buildNoticeUrl({
       capturedToday: true,
+      businessToday: true,
+      businessWeek: true,
       sourceSite: 'https://www.gov.cn:443',
       keyword: '创新药',
       highPriority: true,
+      focusedOnly: true,
       month: '2026-08',
     })
     const parsed = new URL(url, 'http://localhost')
@@ -19,9 +22,12 @@ describe('app router', () => {
     expect(parsed.pathname).toBe('/notices')
     expect(readNoticeQuery(parsed.search)).toEqual({
       capturedToday: true,
+      businessToday: true,
+      businessWeek: true,
       sourceSite: 'https://www.gov.cn:443',
       keyword: '创新药',
       highPriority: true,
+      focusedOnly: true,
       month: '2026-08',
     })
   })

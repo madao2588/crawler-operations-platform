@@ -660,7 +660,7 @@ function TemplateEditorDialog({
       setTestResult(
         [
           result.title ?? '未提取到标题',
-          `质量分：${result.quality_score ?? 0}`,
+          `采集完整度：${result.quality_score ?? 0}（仅表示标题、正文与结构是否完整，不代表信息重要性）`,
           result.content_text ?? '无正文预览',
           result.trace?.notes.join('；') ?? '',
         ]

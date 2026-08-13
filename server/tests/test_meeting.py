@@ -52,6 +52,19 @@ def test_homepage_without_meeting_fields_is_not_a_meeting_record() -> None:
     assert not is_valid_meeting_record("中国药学会", metadata)
 
 
+def test_hosting_notice_with_date_and_location_is_a_meeting_record() -> None:
+    metadata = {
+        "kind": "industry_meeting",
+        "meeting_date": "2025年12月26日—28日",
+        "location": "北京市",
+    }
+
+    assert is_valid_meeting_record(
+        "关于举办第二十五届中国药师周的通知（第三轮）",
+        metadata,
+    )
+
+
 def test_extract_meeting_metadata_rejects_login_and_detail_pages_as_registration_url() -> None:
     html = """
     <html>

@@ -1,7 +1,13 @@
 import pytest
 from playwright.async_api import Error as PlaywrightError
 
-from app.engine.downloader import _launch_chromium, _wait_for_dynamic_content
+from app.engine.downloader import (
+    _assert_safe_playwright_page,
+    _attach_safe_route_guard,
+    _launch_chromium,
+    _wait_for_dynamic_content,
+)
+from app.utils.url_security import UnsafeTargetError
 
 
 @pytest.mark.asyncio
@@ -60,3 +66,41 @@ async def test_wait_for_dynamic_content_uses_source_ready_selector() -> None:
         (".items a[href], .article-content", 45_000),
         ("settle", 250),
     ]
+
+
+@pytest.mark.asyncio
+async def test_attach_safe_route_guard_aborts_private_requests(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[str] = []
+
+    class FakeRequest:
+        url = "http://127.0.0.1:8000/admin"
+
+    class FakeRoute:
+        request = FakeRequest()
+
+        async def abort(self, code: str) -> None:
+            seen.append(f"abort:{code}")
+
+        async def continue_(self) -> None:
+            seen.append("continue")
+
+    class FakeContext:
+        def __init__(self) -> None:
+            self.handler = None
+
+        async def route(self, _pattern: str, handler) -> None:
+            self.handler = handler
+
+    context = FakeContext()
+    await _attach_safe_route_guard(context)
+    assert context.handler is not None
+    await context.handler(FakeRoute())
+    assert seen == ["abort:blockedbyclient"]
+
+
+def test_assert_safe_playwright_page_rejects_private_navigation_target() -> None:
+    class FakePage:
+        url = "http://169.254.169.254/latest/meta-data"
+
+    with pytest.raises(UnsafeTargetError, match="169.254.169.254"):
+        _assert_safe_playwright_page(FakePage())

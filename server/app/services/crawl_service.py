@@ -1,5 +1,7 @@
 import asyncio
+import json
 import logging
+import threading
 import traceback
 from datetime import datetime, timedelta, timezone
 from importlib import import_module
@@ -11,6 +13,18 @@ from app.repositories.task_repo import TaskRepository
 from app.schemas.task import TaskRunPayload
 
 _background_tasks = set()
+_task_run_semaphores: dict[asyncio.AbstractEventLoop, asyncio.Semaphore] = {}
+_task_run_semaphores_lock = threading.Lock()
+
+
+def _get_task_run_semaphore() -> asyncio.Semaphore:
+    loop = asyncio.get_running_loop()
+    with _task_run_semaphores_lock:
+        semaphore = _task_run_semaphores.get(loop)
+        if semaphore is None:
+            semaphore = asyncio.Semaphore(2)
+            _task_run_semaphores[loop] = semaphore
+        return semaphore
 
 
 class TaskRunConflictError(RuntimeError):
@@ -136,7 +150,7 @@ class CrawlService:
             pipeline_result = await pipeline_runner(task_id)
             completed_status = "partial" if pipeline_result == "partial" else "success"
             completion_error = (
-                "Run completed with partial failures; inspect the latest run summary."
+                await self._build_partial_failure_message(task_id=task_id, run_started_at=run_at)
                 if completed_status == "partial"
                 else None
             )
@@ -168,6 +182,52 @@ class CrawlService:
                 error_stack=str(exc),
             )
             raise
+
+    async def _build_partial_failure_message(
+        self,
+        *,
+        task_id: int,
+        run_started_at: datetime,
+    ) -> str:
+        fallback = "本次采集部分完成，部分内容处理失败；已成功采集的内容已保存。请在系统管理查看本次日志。"
+        summary_log = await self.log_repo.get_latest_run_summary(
+            task_id=task_id,
+            created_after=run_started_at.replace(microsecond=0),
+        )
+        if summary_log is None or not summary_log.run_summary:
+            return fallback
+        try:
+            summary = json.loads(summary_log.run_summary)
+        except (json.JSONDecodeError, TypeError):
+            return fallback
+        if not isinstance(summary, dict):
+            return fallback
+
+        run_id = summary.get("run_id")
+        mode = summary.get("mode")
+        metrics = summary.get("metrics")
+        failed = metrics.get("failed") if isinstance(metrics, dict) else None
+        mode_label = {
+            "list_follow": "列表跟进",
+            "pubmed": "PubMed",
+            "clinical_trials": "ClinicalTrials.gov",
+            "meeting_table": "会议日程",
+            "single_page": "单页采集",
+        }.get(mode, "采集任务")
+        failed_label = f"有 {failed} 条处理失败" if isinstance(failed, int) else "有内容处理失败"
+
+        reason = None
+        if isinstance(run_id, str) and run_id:
+            error_log = await self.log_repo.get_latest_error(
+                task_id=task_id,
+                run_id=run_id,
+                created_after=run_started_at.replace(microsecond=0),
+            )
+            if error_log is not None:
+                reason = _humanize_collection_error(error_log.error_stack or error_log.message)
+
+        reason_label = f"；最近原因：{reason}" if reason else ""
+        return f"{mode_label}本次{failed_label}{reason_label}。已成功采集的内容已保存。"
 
     async def trigger_now(self, task_id: int) -> TaskRunPayload:
         task = await self.task_repo.get_by_id(task_id)
@@ -235,14 +295,38 @@ async def _mark_task_failed_after_dispatch_crash(task_id: int, exc: BaseExceptio
 
 
 async def dispatch_task_run(task_id: int) -> None:
-    try:
-        async with AsyncSessionLocal() as session:
-            task_repo = TaskRepository(session)
-            log_repo = LogRepository(session)
-            service = CrawlService(task_repo=task_repo, log_repo=log_repo)
-            await service.run_task(task_id)
-    except BaseException as exc:
-        if isinstance(exc, asyncio.CancelledError):
-            raise
-        logging.exception("dispatch_task_run(%s) crashed", task_id)
-        await _mark_task_failed_after_dispatch_crash(task_id, exc)
+    async with _get_task_run_semaphore():
+        try:
+            async with AsyncSessionLocal() as session:
+                task_repo = TaskRepository(session)
+                log_repo = LogRepository(session)
+                service = CrawlService(task_repo=task_repo, log_repo=log_repo)
+                await service.run_task(task_id)
+        except BaseException as exc:
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+            logging.exception("dispatch_task_run(%s) crashed", task_id)
+            await _mark_task_failed_after_dispatch_crash(task_id, exc)
+
+
+def _humanize_collection_error(value: str | None) -> str | None:
+    text = (value or "").strip()
+    if not text:
+        return None
+    normalized = text.lower()
+    if "timeout" in normalized or "timed out" in normalized:
+        return "请求超时"
+    if "status code 403" in normalized or "403 forbidden" in normalized:
+        return "目标网站拒绝访问（HTTP 403）"
+    if "status code 429" in normalized:
+        return "目标网站请求过于频繁（HTTP 429）"
+    if "captcha" in normalized or "验证码" in text:
+        return "目标网站触发验证码或访问校验"
+    if "ssl" in normalized or "tls" in normalized or "certificate" in normalized:
+        return "目标网站安全连接失败"
+    if "connect" in normalized or "network" in normalized:
+        return "网络无法连接"
+    if "zero detail" in normalized or "selector" in normalized:
+        return "页面结构未匹配到公告详情"
+    last_line = next((line.strip() for line in reversed(text.splitlines()) if line.strip()), text)
+    return last_line[:180]

@@ -11,6 +11,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from playwright.async_api import async_playwright
 
 from app.core.config import get_settings
+from app.utils.url_security import UnsafeTargetError, assert_safe_outbound_url
 
 
 settings = get_settings()
@@ -122,6 +123,7 @@ async def fetch_static(
     cookies: Mapping[str, str] | None = None,
     proxy: Mapping[str, object] | None = None,
 ) -> str:
+    safe_url = assert_safe_outbound_url(url)
     timeout_sec = float(timeout) if timeout is not None else float(settings.timeout)
     merged: dict[str, str] = dict(DEFAULT_HEADERS)
     if headers:
@@ -135,13 +137,14 @@ async def fetch_static(
             "headers": merged,
             "trust_env": False,
         }
-        resolved_proxy = resolve_outbound_proxy(url, proxy)
+        resolved_proxy = resolve_outbound_proxy(safe_url, proxy)
         httpx_proxy = _build_httpx_proxy(resolved_proxy)
         if httpx_proxy is not None:
             client_kwargs["proxy"] = httpx_proxy
         async with httpx.AsyncClient(**client_kwargs) as client:
-            response = await client.get(url, cookies=cookies)
+            response = await client.get(safe_url, cookies=cookies)
             response.raise_for_status()
+            _assert_safe_httpx_response(response)
             return response.text
 
     return await _with_retry(_request)
@@ -180,6 +183,7 @@ async def fetch_dynamic(
     proxy: Mapping[str, object] | None = None,
     wait_for_selector: str | None = None,
 ) -> str:
+    safe_url = assert_safe_outbound_url(url)
     timeout_sec = float(timeout) if timeout is not None else float(settings.timeout)
     timeout_ms = max(5_000, int(timeout_sec * 1000))
 
@@ -193,7 +197,7 @@ async def fetch_dynamic(
         async with async_playwright() as playwright:
             launch_kwargs: dict[str, object] = {"headless": True}
             browser_proxy = _build_playwright_proxy(
-                resolve_outbound_proxy(url, proxy),
+                resolve_outbound_proxy(safe_url, proxy),
             )
             if browser_proxy is not None:
                 launch_kwargs["proxy"] = browser_proxy
@@ -208,8 +212,9 @@ async def fetch_dynamic(
                 if cached_storage is not None:
                     context_kwargs["storage_state"] = cached_storage
                 context = await browser.new_context(**context_kwargs)
+                await _attach_safe_route_guard(context)
                 if cookies:
-                    parsed = urlparse(url)
+                    parsed = urlparse(safe_url)
                     if not parsed.scheme or not parsed.netloc:
                         raise ValueError("Invalid URL for cookie injection")
                     dom = (cookie_domain or "").strip()
@@ -226,14 +231,14 @@ async def fetch_dynamic(
                         if cached_storage is not None:
                             need_login = not await _is_cached_login_session_valid(
                                 page=page,
-                                target_url=url,
+                                target_url=safe_url,
                                 login_flow=login_flow,
                                 default_timeout_ms=timeout_ms,
                             )
                         if need_login:
                             await _run_login_flow(
                                 page=page,
-                                target_url=url,
+                                target_url=safe_url,
                                 login_flow=login_flow,
                                 default_timeout_ms=timeout_ms,
                             )
@@ -246,10 +251,11 @@ async def fetch_dynamic(
                                         ttl_sec=cache_ttl_sec,
                                     )
                     await page.goto(
-                        url,
+                        safe_url,
                         timeout=timeout_ms,
                         wait_until="domcontentloaded",
                     )
+                    _assert_safe_playwright_page(page)
                     await _wait_for_dynamic_content(
                         page,
                         wait_for_selector=wait_for_selector,
@@ -271,12 +277,15 @@ def resolve_outbound_proxy(
     *,
     system_proxies: Mapping[str, str] | None = None,
 ) -> dict[str, str] | None:
-    if _should_bypass_proxy(url):
+    if _is_local_url(url):
         return None
 
     normalized_explicit = _normalize_proxy(explicit_proxy)
     if normalized_explicit is not None:
         return normalized_explicit
+
+    if _should_bypass_proxy(url):
+        return None
 
     configured_proxy = _normalize_proxy_server(
         getattr(settings, "outbound_proxy_url", None),
@@ -298,13 +307,6 @@ def _should_bypass_proxy(url: str) -> bool:
     host = (parsed.hostname or "").strip().lower().rstrip(".")
     if not host:
         return True
-    if host == "localhost":
-        return True
-    try:
-        if ipaddress.ip_address(host).is_loopback:
-            return True
-    except ValueError:
-        pass
 
     raw_no_proxy = str(getattr(settings, "outbound_no_proxy", "") or "")
     for raw_pattern in raw_no_proxy.split(","):
@@ -314,6 +316,16 @@ def _should_bypass_proxy(url: str) -> bool:
         if host == pattern or host.endswith(f".{pattern}"):
             return True
     return False
+
+
+def _is_local_url(url: str) -> bool:
+    host = (urlparse(url).hostname or "").strip().lower().rstrip(".")
+    if not host or host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def _normalize_proxy(
@@ -377,6 +389,47 @@ def _build_playwright_proxy(proxy: Mapping[str, object] | None) -> dict[str, str
     return out
 
 
+def _coerce_response_url(value: object) -> str | None:
+    if isinstance(value, str):
+        return value
+    if hasattr(value, "human_repr"):
+        human_repr = getattr(value, "human_repr")
+        if callable(human_repr):
+            rendered = human_repr()
+            if isinstance(rendered, str):
+                return rendered
+    return str(value) if value is not None else None
+
+
+def _assert_safe_httpx_response(response: object) -> None:
+    history = getattr(response, "history", [])
+    for item in list(history) + [response]:
+        candidate = _coerce_response_url(getattr(item, "url", None))
+        if candidate:
+            assert_safe_outbound_url(candidate)
+
+
+async def _attach_safe_route_guard(context) -> None:
+    async def _guard(route) -> None:
+        request = route.request
+        candidate = getattr(request, "url", None)
+        if isinstance(candidate, str) and candidate.startswith(("http://", "https://")):
+            try:
+                assert_safe_outbound_url(candidate)
+            except UnsafeTargetError:
+                await route.abort("blockedbyclient")
+                return
+        await route.continue_()
+
+    await context.route("**/*", _guard)
+
+
+def _assert_safe_playwright_page(page) -> None:
+    candidate = getattr(page, "url", None)
+    if isinstance(candidate, str) and candidate.startswith(("http://", "https://")):
+        assert_safe_outbound_url(candidate)
+
+
 def _resolve_session_cache_options(
     login_flow: Mapping[str, object] | None,
 ) -> tuple[str | None, int]:
@@ -432,6 +485,7 @@ async def _is_cached_login_session_valid(
         return True
     check_url_raw = login_flow.get("session_check_url")
     check_url = check_url_raw.strip() if isinstance(check_url_raw, str) and check_url_raw.strip() else target_url
+    check_url = assert_safe_outbound_url(check_url)
     timeout_ms = _bounded_timeout(login_flow.get("timeout_ms"), default_timeout_ms)
     timeout_ms = min(timeout_ms, 6_000)
     try:
@@ -440,6 +494,7 @@ async def _is_cached_login_session_valid(
             timeout=timeout_ms,
             wait_until="domcontentloaded",
         )
+        _assert_safe_playwright_page(page)
         await page.wait_for_selector(check_selector.strip(), timeout=timeout_ms)
         return True
     except (PlaywrightTimeoutError, PlaywrightError):
@@ -456,17 +511,20 @@ async def _run_login_flow(
     flow_timeout = _bounded_timeout(login_flow.get("timeout_ms"), default_timeout_ms)
     login_url = login_flow.get("url")
     if isinstance(login_url, str) and login_url.strip():
+        safe_login_url = assert_safe_outbound_url(login_url.strip())
         await page.goto(
-            login_url.strip(),
+            safe_login_url,
             timeout=flow_timeout,
             wait_until="domcontentloaded",
         )
+        _assert_safe_playwright_page(page)
     else:
         await page.goto(
             target_url,
             timeout=flow_timeout,
             wait_until="domcontentloaded",
         )
+        _assert_safe_playwright_page(page)
 
     values_raw = login_flow.get("values")
     values: Mapping[str, str] = values_raw if isinstance(values_raw, Mapping) else {}
@@ -482,11 +540,13 @@ async def _run_login_flow(
         if action == "goto":
             step_url = step_raw.get("url")
             if isinstance(step_url, str) and step_url.strip():
+                safe_step_url = assert_safe_outbound_url(step_url.strip())
                 await page.goto(
-                    step_url.strip(),
+                    safe_step_url,
                     timeout=timeout_ms,
                     wait_until="domcontentloaded",
                 )
+                _assert_safe_playwright_page(page)
             continue
         if action == "fill":
             selector = step_raw.get("selector")

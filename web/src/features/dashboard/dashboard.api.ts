@@ -1,5 +1,6 @@
 import type {
   DashboardMetrics,
+  DashboardCollectionHealth,
   DashboardOverview,
   DashboardRuntime,
   KeywordHeatItem,
@@ -21,12 +22,44 @@ function mapDashboardOverview(raw: unknown): DashboardOverview {
   return {
     metrics: mapMetrics(record.metrics),
     runtime: mapRuntime(record.runtime),
+    collectionHealth: mapCollectionHealth(record.collection_health),
     highValueNotices: mapNoticeList(record.high_value_notices),
     recentNotices: mapNoticeList(record.recent_notices),
     keywordHeat: mapKeywordHeat(record.keyword_heat),
     sourceDistribution: mapSourceDistribution(record.source_distribution),
     projectSignalDistribution: mapProjectSignals(record.project_signal_distribution),
     lastUpdatedAt: asOptionalString(record.last_updated_at),
+  }
+}
+
+function mapCollectionHealth(raw: unknown): DashboardCollectionHealth {
+  const record = asRecord(raw)
+  return {
+    status: asString(record.status, 'idle'),
+    monitoredTaskCount: asNumber(record.monitored_task_count),
+    failedTaskCount: asNumber(record.failed_task_count),
+    partialTaskCount: asNumber(record.partial_task_count),
+    staleTaskCount: asNumber(record.stale_task_count),
+    lastSuccessAt: asOptionalString(record.last_success_at),
+    failedSources: Array.isArray(record.failed_sources)
+      ? record.failed_sources.filter((item): item is string => typeof item === 'string')
+      : [],
+    partialSources: Array.isArray(record.partial_sources)
+      ? record.partial_sources.filter((item): item is string => typeof item === 'string')
+      : [],
+    issues: Array.isArray(record.issues)
+      ? record.issues.map((item) => {
+          const issue = asRecord(item)
+          return {
+            taskId: asNumber(issue.task_id),
+            taskName: asString(issue.task_name, '未命名采集任务'),
+            status: asString(issue.status, 'failed'),
+            reason: asString(issue.reason, '采集状态异常，请查看系统日志。'),
+            isStale: Boolean(issue.is_stale),
+            lastSuccessAt: asOptionalString(issue.last_success_at),
+          }
+        })
+      : [],
   }
 }
 

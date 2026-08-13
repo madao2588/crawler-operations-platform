@@ -61,6 +61,7 @@ def pytest_configure() -> None:
         _active_test_db_path = db_path
     os.environ.setdefault("CRAWLER_BOOTSTRAP_ADMIN_USERNAME", "pytest_admin")
     os.environ.setdefault("CRAWLER_BOOTSTRAP_ADMIN_PASSWORD", "pytest-password-123")
+    os.environ.setdefault("CRAWLER_STARTUP_CATCH_UP_ENABLED", "false")
     from app.core.config import get_settings
 
     get_settings.cache_clear()

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Filter, RotateCcw } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { ArrowRight, Bookmark, CalendarCheck2, CalendarRange, ExternalLink, FileText, Filter, RotateCcw, Star } from 'lucide-react'
 import { ApiError } from '../../api/client'
 import {
   buildNoticeUrl,
@@ -10,6 +10,7 @@ import {
 } from '../../app/router'
 import { useAuth } from '../../auth/AuthProvider'
 import { DetailDrawer, PageToolbar } from '../../components/UiPrimitives'
+import { COLLECTION_COMPLETENESS_HELP, collectionCompletenessLabel } from '../../utils/completeness'
 import './notices.css'
 
 interface PageData<T> {
@@ -35,6 +36,7 @@ interface NoticeItem {
   ai_summary: string | null
   review_status: string
   is_archived: boolean
+  is_focused?: boolean
   remark: string | null
   task_id: number
 }
@@ -72,6 +74,7 @@ interface CountState {
 }
 
 const pageSize = 20
+const focusedReviewStatus = '重点关注'
 const reviewOptions = ['待关注', '已跟进', '已忽略']
 const knownCategories = ['项目申报通知', '结果公示', '行业会议', '竞品文献']
 
@@ -84,6 +87,8 @@ export function NoticesPage({ canManage = true }: { canManage?: boolean }) {
 
   const [searchDraft, setSearchDraft] = useState(currentQuery.keyword ?? '')
   const [page, setPage] = useState(1)
+  const [pageDraft, setPageDraft] = useState('1')
+  const noticeListRef = useRef<HTMLDivElement>(null)
   const [listState, setListState] = useState<LoadState<PageData<NoticeItem>>>({ status: 'loading' })
   const [detailState, setDetailState] = useState<LoadState<NoticeDetail>>({ status: 'idle' })
   const [sourceSitesState, setSourceSitesState] = useState<LoadState<NoticeSourceSiteOption[]>>({
@@ -93,6 +98,7 @@ export function NoticesPage({ canManage = true }: { canManage?: boolean }) {
     status: 'loading',
   })
   const [monthsReloadVersion, setMonthsReloadVersion] = useState(0)
+  const [dataReloadVersion, setDataReloadVersion] = useState(0)
   const [countState, setCountState] = useState<LoadState<CountState>>({ status: 'loading' })
   const [feedback, setFeedback] = useState<string | null>(null)
   const [reviewPending, setReviewPending] = useState<string | null>(null)
@@ -115,12 +121,24 @@ export function NoticesPage({ canManage = true }: { canManage?: boolean }) {
     currentQuery.reviewStatus,
     currentQuery.archived,
     currentQuery.capturedToday,
+    currentQuery.businessToday,
+    currentQuery.businessWeek,
     currentQuery.sourceSite,
     currentQuery.keywordHit,
     currentQuery.highPriority,
     currentQuery.highQuality,
+    currentQuery.focusedOnly,
     currentQuery.projectSignal,
   ])
+
+  useEffect(() => {
+    setPageDraft(String(page))
+    if (noticeListRef.current) noticeListRef.current.scrollTop = 0
+  }, [page])
+
+  useEffect(() => {
+    setFeedback(null)
+  }, [currentQuery, page])
 
   useEffect(() => {
     let active = true
@@ -164,11 +182,14 @@ export function NoticesPage({ canManage = true }: { canManage?: boolean }) {
   }, [
     client,
     monthsReloadVersion,
+    dataReloadVersion,
     currentQuery.keyword,
     currentQuery.category,
     currentQuery.reviewStatus,
     currentQuery.archived,
     currentQuery.capturedToday,
+    currentQuery.businessToday,
+    currentQuery.businessWeek,
     currentQuery.sourceSite,
     currentQuery.keywordHit,
     currentQuery.highPriority,
@@ -180,7 +201,6 @@ export function NoticesPage({ canManage = true }: { canManage?: boolean }) {
     let active = true
     const controller = new AbortController()
     setListState({ status: 'loading' })
-    setFeedback(null)
     client
       .get<PageData<NoticeItem>>('/v1/notices', {
         signal: controller.signal,
@@ -198,7 +218,7 @@ export function NoticesPage({ canManage = true }: { canManage?: boolean }) {
       active = false
       controller.abort()
     }
-  }, [client, currentQuery, page])
+  }, [client, currentQuery, page, dataReloadVersion])
 
   useEffect(() => {
     let active = true
@@ -220,7 +240,7 @@ export function NoticesPage({ canManage = true }: { canManage?: boolean }) {
       active = false
       controller.abort()
     }
-  }, [client, currentQuery])
+  }, [client, currentQuery, dataReloadVersion])
 
   useEffect(() => {
     if (!selectedNoticeId) {
@@ -264,6 +284,15 @@ export function NoticesPage({ canManage = true }: { canManage?: boolean }) {
   const totalPages =
     listState.status === 'success' ? Math.max(1, Math.ceil(listState.data.total / pageSize)) : 1
 
+  function jumpToPage() {
+    const requested = Number.parseInt(pageDraft, 10)
+    const target = Number.isFinite(requested)
+      ? Math.min(totalPages, Math.max(1, requested))
+      : page
+    setPageDraft(String(target))
+    setPage(target)
+  }
+
   return (
     <main className="notices-page">
       <PageToolbar
@@ -291,8 +320,20 @@ export function NoticesPage({ canManage = true }: { canManage?: boolean }) {
         <SummaryCard
           title="全部公告"
           value={countState.status === 'success' ? countState.data.total : '...'}
-          active={!currentQuery.highPriority && !currentQuery.keywordHit}
-          onClick={() => replaceQuery(navigate, currentQuery, { highPriority: undefined, keywordHit: undefined })}
+          active={
+            !currentQuery.highPriority &&
+            !currentQuery.keywordHit &&
+            !currentQuery.reviewStatus &&
+            !currentQuery.focusedOnly
+          }
+          onClick={() =>
+            replaceQuery(navigate, currentQuery, {
+              highPriority: undefined,
+              keywordHit: undefined,
+              reviewStatus: undefined,
+              focusedOnly: undefined,
+            })
+          }
         />
         <SummaryCard
           title="高优先级公告"
@@ -311,11 +352,68 @@ export function NoticesPage({ canManage = true }: { canManage?: boolean }) {
       <MonthFilterBar
         state={monthsState}
         selectedMonth={currentQuery.month}
+        todayKeywordHitActive={
+          currentQuery.businessToday === true && currentQuery.keywordHit === true
+        }
+        businessWeekActive={currentQuery.businessWeek === true}
+        importantActive={currentQuery.reviewStatus === focusedReviewStatus}
+        personalFocusActive={currentQuery.focusedOnly === true}
+        onToggleTodayKeywordHit={() => {
+          const active =
+            currentQuery.businessToday === true && currentQuery.keywordHit === true
+          replaceQuery(
+            navigate,
+            currentQuery,
+            active
+              ? { businessToday: undefined, keywordHit: undefined }
+              : {
+                  businessToday: true,
+                  businessWeek: undefined,
+                  capturedToday: undefined,
+                  keywordHit: true,
+                  month: undefined,
+                },
+          )
+        }}
+        onToggleBusinessWeek={() => {
+          const businessWeek = currentQuery.businessWeek ? undefined : true
+          replaceQuery(navigate, currentQuery, {
+            businessWeek,
+            businessToday: businessWeek ? undefined : currentQuery.businessToday,
+            capturedToday: businessWeek ? undefined : currentQuery.capturedToday,
+            month: businessWeek ? undefined : currentQuery.month,
+          })
+        }}
+        onToggleImportant={() =>
+          replaceQuery(navigate, currentQuery, {
+            reviewStatus:
+              currentQuery.reviewStatus === focusedReviewStatus
+                ? undefined
+                : focusedReviewStatus,
+          })
+        }
+        onTogglePersonalFocus={() =>
+          replaceQuery(navigate, currentQuery, {
+            focusedOnly: currentQuery.focusedOnly ? undefined : true,
+          })
+        }
         onSelect={(month) =>
           replaceQuery(
             navigate,
             currentQuery,
-            month ? { month, capturedToday: undefined } : { month: undefined },
+            month
+              ? {
+                  month,
+                  capturedToday: undefined,
+                  businessToday: undefined,
+                  businessWeek: undefined,
+                }
+              : {
+                  month: undefined,
+                  capturedToday: undefined,
+                  businessToday: undefined,
+                  businessWeek: undefined,
+                },
           )
         }
         onRetry={() => setMonthsReloadVersion((value) => value + 1)}
@@ -458,6 +556,8 @@ export function NoticesPage({ canManage = true }: { canManage?: boolean }) {
                   const capturedToday = currentQuery.capturedToday ? undefined : true
                   replaceQuery(navigate, currentQuery, {
                     capturedToday,
+                    businessToday: capturedToday ? undefined : currentQuery.businessToday,
+                    businessWeek: capturedToday ? undefined : currentQuery.businessWeek,
                     month: capturedToday ? undefined : currentQuery.month,
                   })
                 }}
@@ -504,6 +604,7 @@ export function NoticesPage({ canManage = true }: { canManage?: boolean }) {
           {listState.status === 'success' ? (
             <>
               <div
+                ref={noticeListRef}
                 className="notice-list"
                 role="region"
                 aria-label="公告结果"
@@ -512,9 +613,15 @@ export function NoticesPage({ canManage = true }: { canManage?: boolean }) {
               >
                 {listState.data.items.map((item) => {
                   const selected = item.id === selectedNoticeId
+                  const important = item.review_status === focusedReviewStatus
+                  const personallyFocused = item.is_focused === true
                   const sourceName = sourceNameMap.get(item.source_site) ?? item.source_site
                   return (
-                    <article key={item.id} className={`notice-card ${selected ? 'is-selected' : ''}`} aria-label={item.title}>
+                    <article
+                      key={item.id}
+                      className={`notice-card ${selected ? 'is-selected' : ''} ${important ? 'is-important' : ''}`}
+                      aria-label={item.title}
+                    >
                       <div
                         className="notice-card-hitbox"
                         role="button"
@@ -532,13 +639,67 @@ export function NoticesPage({ canManage = true }: { canManage?: boolean }) {
                             <span className={`priority-badge ${item.is_high_priority ? 'is-hot' : ''}`}>
                               {item.is_high_priority ? '高优先级' : '常规'}
                             </span>
-                            <span className="quality-badge">质量 {item.quality_score}</span>
-                          </span>
-                          <span className="meta-copy notice-card-time">
-                            <span className="notice-date-basis">
-                              {item.published_at ? '发布日期' : '采集日期'}
+                            <span
+                              className="quality-badge"
+                              title={COLLECTION_COMPLETENESS_HELP}
+                              aria-label={collectionCompletenessLabel(item.quality_score)}
+                            >
+                              {collectionCompletenessLabel(item.quality_score)}
                             </span>
-                            <span>{formatDate(item.published_at ?? item.captured_at)}</span>
+                            {important ? (
+                              <span className="important-badge">
+                                <Star aria-hidden="true" fill="currentColor" />
+                                重点关注
+                              </span>
+                            ) : null}
+                          </span>
+                          <span className="notice-card-top-actions">
+                            <button
+                              type="button"
+                              className={`important-toggle personal-focus-toggle ${personallyFocused ? 'is-active' : ''}`}
+                              aria-label={personallyFocused ? '取消我的关注' : '加入我的关注'}
+                              title={`${personallyFocused ? '取消' : '加入'}我的关注：${item.title}`}
+                              aria-pressed={personallyFocused}
+                              disabled={reviewPending !== null}
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                updatePersonalFocus(client, item)
+                              }}
+                            >
+                              <Bookmark aria-hidden="true" fill={personallyFocused ? 'currentColor' : 'none'} />
+                            </button>
+                            {canManage ? (
+                              <button
+                                type="button"
+                                className={`important-toggle ${important ? 'is-active' : ''}`}
+                                aria-label={important ? '取消重点关注' : '标记重点关注'}
+                                title={`${important ? '取消' : '标记'}重点关注：${item.title}`}
+                                aria-pressed={important}
+                                disabled={reviewPending !== null}
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  updateReview(client, item, {
+                                    review_status: important ? '待关注' : focusedReviewStatus,
+                                  })
+                                }}
+                              >
+                                <Star aria-hidden="true" fill={important ? 'currentColor' : 'none'} />
+                              </button>
+                            ) : null}
+                            <span className="meta-copy notice-card-time">
+                              {isHistoricalBackfill(item.published_at, item.captured_at) ? (
+                                <span
+                                  className="notice-backfill-badge"
+                                  title="该公告发布后较晚才被系统采集，原发布日期已保留"
+                                >
+                                  历史补采
+                                </span>
+                              ) : null}
+                              <span className="notice-date-basis">
+                                {item.published_at ? '发布日期' : '采集日期'}
+                              </span>
+                              <span>{formatCardDate(item.published_at, item.captured_at)}</span>
+                            </span>
                           </span>
                         </div>
                         <h3>{item.title}</h3>
@@ -597,15 +758,46 @@ export function NoticesPage({ canManage = true }: { canManage?: boolean }) {
               </div>
 
               <footer className="pagination-row">
-                <button type="button" className="secondary-action" disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>
-                  上一页
-                </button>
-                <span>
-                  第 {page} / {totalPages} 页
-                </span>
                 <button
                   type="button"
-                  className="secondary-action"
+                  className="pagination-nav-button"
+                  disabled={page <= 1}
+                  onClick={() => setPage((value) => value - 1)}
+                >
+                  上一页
+                </button>
+                <form
+                  className="pagination-jump"
+                  noValidate
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    jumpToPage()
+                  }}
+                >
+                  <label htmlFor="notice-page-jump">第</label>
+                  <input
+                    id="notice-page-jump"
+                    type="number"
+                    aria-label="跳转页码"
+                    min={1}
+                    max={totalPages}
+                    inputMode="numeric"
+                    value={pageDraft}
+                    onChange={(event) => setPageDraft(event.target.value)}
+                  />
+                  <span>/ {totalPages} 页</span>
+                  <button
+                    type="submit"
+                    className="pagination-jump__button"
+                    aria-label="前往指定页"
+                    title="前往指定页"
+                  >
+                    <ArrowRight aria-hidden="true" />
+                  </button>
+                </form>
+                <button
+                  type="button"
+                  className="pagination-nav-button"
                   disabled={page >= totalPages}
                   onClick={() => setPage((value) => value + 1)}
                 >
@@ -648,6 +840,7 @@ export function NoticesPage({ canManage = true }: { canManage?: boolean }) {
               }
               onKeywordClick={(keyword) => replaceQuery(navigate, currentQuery, { keyword })}
               onReviewChange={(reviewStatus) => updateReview(client, detailState.data, { review_status: reviewStatus })}
+              onPersonalFocusToggle={() => updatePersonalFocus(client, detailState.data)}
               onArchiveToggle={() => updateArchive(client, detailState.data)}
               onSnapshotOpen={() => openSnapshot(client, detailState.data.id)}
             />
@@ -678,7 +871,7 @@ export function NoticesPage({ canManage = true }: { canManage?: boolean }) {
     </main>
   )
 
-  function updateReview(apiClient: typeof client, detail: NoticeDetail, patch: { review_status?: string }) {
+  function updateReview(apiClient: typeof client, detail: NoticeItem, patch: { review_status?: string }) {
     const actionLabel = patch.review_status ? `review-${patch.review_status}` : 'review'
     setReviewPending(actionLabel)
     setFeedback(null)
@@ -689,8 +882,14 @@ export function NoticesPage({ canManage = true }: { canManage?: boolean }) {
         remark: detail.remark,
       })
       .then((data) => {
-        setDetailState({ status: 'success', data })
-        setFeedback(`已更新为“${data.review_status}”`)
+        if (selectedNoticeId === data.id) setDetailState({ status: 'success', data })
+        setFeedback(
+          data.review_status === focusedReviewStatus
+            ? '已标记为重点关注'
+            : patch.review_status === '待关注' && detail.review_status === focusedReviewStatus
+              ? '已取消重点关注'
+              : `已更新为“${data.review_status}”`,
+        )
         reloadList()
       })
       .catch((error) => {
@@ -699,6 +898,23 @@ export function NoticesPage({ canManage = true }: { canManage?: boolean }) {
       .finally(() => {
         setReviewPending(null)
       })
+  }
+
+  function updatePersonalFocus(apiClient: typeof client, detail: NoticeItem) {
+    const nextFocused = detail.is_focused !== true
+    setReviewPending('personal-focus')
+    setFeedback(null)
+    const request = nextFocused
+      ? apiClient.put<NoticeDetail>(`/v1/notices/${detail.id}/focus`)
+      : apiClient.delete<NoticeDetail>(`/v1/notices/${detail.id}/focus`)
+    request
+      .then((data) => {
+        if (selectedNoticeId === data.id) setDetailState({ status: 'success', data })
+        setFeedback(data.is_focused ? '已加入我的关注' : '已取消我的关注')
+        reloadList()
+      })
+      .catch((error) => setFeedback(toErrorMessage(error)))
+      .finally(() => setReviewPending(null))
   }
 
   function updateArchive(apiClient: typeof client, detail: NoticeDetail) {
@@ -740,10 +956,7 @@ export function NoticesPage({ canManage = true }: { canManage?: boolean }) {
   }
 
   function reloadList() {
-    client
-      .get<PageData<NoticeItem>>('/v1/notices', { query: buildListQuery(currentQuery, page) })
-      .then((data) => setListState({ status: 'success', data }))
-      .catch((error) => setListState({ status: 'error', error: toErrorMessage(error) }))
+    setDataReloadVersion((value) => value + 1)
   }
 }
 
@@ -757,6 +970,7 @@ function NoticeDetailView(props: {
   onProjectSignalClick: () => void
   onKeywordClick: (keyword: string) => void
   onReviewChange: (reviewStatus: string) => void
+  onPersonalFocusToggle: () => void
   onArchiveToggle: () => void
   onSnapshotOpen: () => void
 }) {
@@ -765,10 +979,24 @@ function NoticeDetailView(props: {
   return (
     <article className="detail-card">
       <div className="notice-card-topline">
-        <span className={`priority-badge ${detail.is_high_priority ? 'is-hot' : ''}`}>
-          {detail.is_high_priority ? '高优先级' : '常规'}
+        <span className="notice-badge-row">
+          <span className={`priority-badge ${detail.is_high_priority ? 'is-hot' : ''}`}>
+            {detail.is_high_priority ? '高优先级' : '常规'}
+          </span>
+          {detail.review_status === focusedReviewStatus ? (
+            <span className="important-badge">
+              <Star aria-hidden="true" fill="currentColor" />
+              重点关注
+            </span>
+          ) : null}
         </span>
-        <span className="quality-badge">质量 {detail.quality_score}</span>
+        <span
+          className="quality-badge"
+          title={COLLECTION_COMPLETENESS_HELP}
+          aria-label={collectionCompletenessLabel(detail.quality_score)}
+        >
+          {collectionCompletenessLabel(detail.quality_score)}
+        </span>
       </div>
       <h3>{detail.title}</h3>
       <p className="detail-summary">{detail.ai_summary || detail.summary || '暂无摘要'}</p>
@@ -823,8 +1051,50 @@ function NoticeDetailView(props: {
 
       <section className="detail-section">
         <h4>处理动作</h4>
+        <div className="detail-action-row">
+          <button
+            type="button"
+            className={`focus-action personal-focus-action ${detail.is_focused ? 'is-active' : ''}`}
+            disabled={reviewPending !== null}
+            aria-label={detail.is_focused ? '取消我的关注' : '加入我的关注'}
+            aria-pressed={detail.is_focused === true}
+            onClick={props.onPersonalFocusToggle}
+          >
+            <Bookmark aria-hidden="true" fill={detail.is_focused ? 'currentColor' : 'none'} />
+            {reviewPending === 'personal-focus'
+              ? '处理中...'
+              : detail.is_focused
+                ? '取消我的关注'
+                : '加入我的关注'}
+          </button>
+        </div>
         {props.canManage ? (
           <div className="detail-action-row">
+            <button
+              type="button"
+              className={`focus-action ${detail.review_status === focusedReviewStatus ? 'is-active' : ''}`}
+              disabled={reviewPending !== null}
+              aria-label={
+                detail.review_status === focusedReviewStatus ? '取消重点关注' : '标记重点关注'
+              }
+              aria-pressed={detail.review_status === focusedReviewStatus}
+              onClick={() =>
+                props.onReviewChange(
+                  detail.review_status === focusedReviewStatus ? '待关注' : focusedReviewStatus,
+                )
+              }
+            >
+              <Star
+                aria-hidden="true"
+                fill={detail.review_status === focusedReviewStatus ? 'currentColor' : 'none'}
+              />
+              {reviewPending === `review-${focusedReviewStatus}` ||
+              (reviewPending === 'review-待关注' && detail.review_status === focusedReviewStatus)
+                ? '处理中...'
+                : detail.review_status === focusedReviewStatus
+                  ? '取消重点'
+                  : '标记重点'}
+            </button>
             {reviewOptions.map((status) => (
               <button
                 key={status}
@@ -840,8 +1110,8 @@ function NoticeDetailView(props: {
         ) : (
           <p className="read-only-banner">普通用户可查看详情，但不能修改跟进状态或归档。</p>
         )}
-        <div className="detail-action-row">
-          {props.canManage ? (
+        {props.canManage ? (
+          <div className="detail-action-row">
             <button
               type="button"
               className="secondary-action"
@@ -851,13 +1121,27 @@ function NoticeDetailView(props: {
             >
               {reviewPending === 'archive' ? '处理中...' : detail.is_archived ? '取消归档' : '归档公告'}
             </button>
-          ) : null}
-          <button type="button" className="primary-action" aria-label="查看采集快照" onClick={props.onSnapshotOpen}>
-            查看采集快照
-          </button>
-          <a className="text-link" href={detail.source_url} target="_blank" rel="noreferrer">
+          </div>
+        ) : null}
+        <div className="detail-source-actions">
+          <a
+            className="primary-action notice-original-action"
+            href={detail.source_url}
+            target="_blank"
+            rel="noreferrer"
+          >
+            <ExternalLink aria-hidden="true" />
             查看原文
           </a>
+          <button
+            type="button"
+            className="secondary-action notice-snapshot-action"
+            aria-label="查看采集快照"
+            onClick={props.onSnapshotOpen}
+          >
+            <FileText aria-hidden="true" />
+            查看快照
+          </button>
         </div>
       </section>
 
@@ -872,6 +1156,14 @@ function NoticeDetailView(props: {
 function MonthFilterBar(props: {
   state: LoadState<NoticeMonthOption[]>
   selectedMonth?: string
+  todayKeywordHitActive: boolean
+  businessWeekActive: boolean
+  importantActive: boolean
+  personalFocusActive: boolean
+  onToggleTodayKeywordHit: () => void
+  onToggleBusinessWeek: () => void
+  onToggleImportant: () => void
+  onTogglePersonalFocus: () => void
   onSelect: (month?: string) => void
   onRetry: () => void
 }) {
@@ -885,15 +1177,64 @@ function MonthFilterBar(props: {
       ? [{ month: props.selectedMonth, count: 0 }, ...olderMonths]
       : olderMonths
   const allCount = months.reduce((sum, item) => sum + item.count, 0)
+  const allMonthsActive =
+    !props.selectedMonth &&
+    !props.todayKeywordHitActive &&
+    !props.businessWeekActive &&
+    !props.importantActive &&
+    !props.personalFocusActive
 
   return (
-    <section className="notice-month-bar" aria-label="按月筛选">
+    <section className="notice-month-bar" aria-label="快捷与按月筛选">
+      <button
+        type="button"
+        className={`today-keyword-chip personal-focus-chip ${props.personalFocusActive ? 'is-active' : ''}`}
+        aria-label="只看我的关注"
+        aria-pressed={props.personalFocusActive}
+        title="只显示当前账号关注的公告；不同用户互不影响"
+        onClick={props.onTogglePersonalFocus}
+      >
+        <Bookmark aria-hidden="true" fill={props.personalFocusActive ? 'currentColor' : 'none'} />
+        <span>我的关注</span>
+      </button>
+      <button
+        type="button"
+        className={`today-keyword-chip ${props.todayKeywordHitActive ? 'is-active' : ''}`}
+        aria-pressed={props.todayKeywordHitActive}
+        title="按网站发布日期筛选；缺少发布日期时按采集日期"
+        onClick={props.onToggleTodayKeywordHit}
+      >
+        <CalendarCheck2 aria-hidden="true" />
+        <span>今日发布命中</span>
+      </button>
+      <button
+        type="button"
+        className={`today-keyword-chip business-week-chip ${props.businessWeekActive ? 'is-active' : ''}`}
+        aria-pressed={props.businessWeekActive}
+        title="本周一至今天；优先按网站发布日期，缺少时按采集日期"
+        onClick={props.onToggleBusinessWeek}
+      >
+        <CalendarRange aria-hidden="true" />
+        <span>本周发布</span>
+      </button>
+      <button
+        type="button"
+        className={`today-keyword-chip focus-review-chip ${props.importantActive ? 'is-active' : ''}`}
+        aria-label="只看重点关注"
+        aria-pressed={props.importantActive}
+        title="只显示人工标记为重点关注的公告"
+        onClick={props.onToggleImportant}
+      >
+        <Star aria-hidden="true" fill={props.importantActive ? 'currentColor' : 'none'} />
+        <span>重点关注</span>
+      </button>
+      <span className="notice-filter-divider" aria-hidden="true" />
       <strong className="notice-month-title">按月查看</strong>
       <div className="notice-month-track">
         <button
           type="button"
-          className={`month-chip ${props.selectedMonth ? '' : 'is-active'}`}
-          aria-pressed={!props.selectedMonth}
+          className={`month-chip ${allMonthsActive ? 'is-active' : ''}`}
+          aria-pressed={allMonthsActive}
           onClick={() => props.onSelect(undefined)}
         >
           <span>全部月份</span>
@@ -1027,19 +1368,25 @@ function buildListQuery(query: NoticeQuery, page: number, customPageSize = pageS
     review_status: query.reviewStatus,
     archived: query.archived,
     captured_today: query.capturedToday,
+    business_today: query.businessToday,
+    business_week: query.businessWeek,
     source_site: query.sourceSite,
     keyword_hit: query.keywordHit,
     high_priority: query.highPriority,
     high_quality: query.highQuality,
+    focused_only: query.focusedOnly,
     project_signal: query.projectSignal,
   }
 }
 
 function buildMonthQuery(query: NoticeQuery) {
-  const { page: _page, page_size: _pageSize, month: _month, ...filters } = buildListQuery(
-    query,
-    1,
-  )
+  const {
+    page: _page,
+    page_size: _pageSize,
+    month: _month,
+    business_week: _businessWeek,
+    ...filters
+  } = buildListQuery(query, 1)
   return filters
 }
 
@@ -1055,10 +1402,13 @@ function replaceQuery(
     reviewStatus: 'reviewStatus' in patch ? patch.reviewStatus : query.reviewStatus,
     archived: 'archived' in patch ? patch.archived : query.archived,
     capturedToday: 'capturedToday' in patch ? patch.capturedToday : query.capturedToday,
+    businessToday: 'businessToday' in patch ? patch.businessToday : query.businessToday,
+    businessWeek: 'businessWeek' in patch ? patch.businessWeek : query.businessWeek,
     sourceSite: 'sourceSite' in patch ? patch.sourceSite : query.sourceSite,
     keywordHit: 'keywordHit' in patch ? patch.keywordHit : query.keywordHit,
     highPriority: 'highPriority' in patch ? patch.highPriority : query.highPriority,
     highQuality: 'highQuality' in patch ? patch.highQuality : query.highQuality,
+    focusedOnly: 'focusedOnly' in patch ? patch.focusedOnly : query.focusedOnly,
     projectSignal: 'projectSignal' in patch ? patch.projectSignal : query.projectSignal,
     noticeId: 'noticeId' in patch ? patch.noticeId : query.noticeId,
   }
@@ -1080,22 +1430,34 @@ function buildActiveFilters(query: NoticeQuery, sourceNameMap: Map<string, strin
   if (query.reviewStatus) filters.push({ key: 'reviewStatus', label: `状态: ${query.reviewStatus}` })
   if (query.sourceSite) filters.push({ key: 'sourceSite', label: `来源: ${sourceNameMap.get(query.sourceSite) ?? query.sourceSite}` })
   if (query.capturedToday) filters.push({ key: 'capturedToday', label: '仅今日采集' })
+  if (query.businessToday) filters.push({ key: 'businessToday', label: '今日发布' })
+  if (query.businessWeek) filters.push({ key: 'businessWeek', label: '本周发布' })
   if (query.archived) filters.push({ key: 'archived', label: '仅已归档' })
   if (query.highPriority) filters.push({ key: 'highPriority', label: '高优先级' })
   if (query.keywordHit) filters.push({ key: 'keywordHit', label: '关键词命中' })
+  if (query.focusedOnly) filters.push({ key: 'focusedOnly', label: '我的关注' })
   return filters
 }
 
-function formatDate(value: string | null) {
+function formatCardDate(publishedAt: string | null, capturedAt: string | null) {
+  const value = publishedAt ?? capturedAt
   if (!value) return '时间未知'
   const date = new Date(value)
   if (Number.isNaN(date.valueOf())) return value
   return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
     month: '2-digit',
     day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
+    ...(publishedAt ? {} : { hour: '2-digit', minute: '2-digit' }),
   }).format(date)
+}
+
+function isHistoricalBackfill(publishedAt: string | null, capturedAt: string | null) {
+  if (!publishedAt || !capturedAt) return false
+  const publishedTime = new Date(publishedAt).getTime()
+  const capturedTime = new Date(capturedAt).getTime()
+  if (!Number.isFinite(publishedTime) || !Number.isFinite(capturedTime)) return false
+  return capturedTime - publishedTime >= 7 * 24 * 60 * 60 * 1000
 }
 
 function formatFullDate(value: string | null) {

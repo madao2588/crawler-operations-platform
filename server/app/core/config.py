@@ -18,11 +18,21 @@ class Settings(BaseSettings):
         "kjj.changsha.gov.cn"
     )
     task_stale_minutes: int = 30
+    startup_catch_up_enabled: bool = True
     snapshot_dir: str = "storage/snapshots"
     export_dir: str = "storage/exports"
     bootstrap_admin_username: str | None = None
     bootstrap_admin_password: str | None = None
     session_ttl_days: int = 7
+    maintenance_enabled: bool = True
+    maintenance_backup_dir: str = "backups/runtime"
+    maintenance_backup_retention_days: int = 14
+    maintenance_manifest_retention_days: int = 14
+    maintenance_export_retention_days: int = 30
+    maintenance_log_retention_days: int = 90
+    login_rate_limit_attempts: int = 5
+    login_rate_limit_window_minutes: int = 15
+    login_rate_limit_block_minutes: int = 15
     cors_allowed_origins: str = (
         "http://127.0.0.1:3000,"
         "http://localhost:3000,"

@@ -94,6 +94,27 @@ def test_extract_list_follow_filters_detail_links_by_keywords() -> None:
     ]
 
 
+def test_project_list_follow_excludes_draft_guide_opinion_notices() -> None:
+    html = """
+    <html><body>
+      <li><a href="/notice/1">关于组织申报重点领域研发计划项目的通知</a></li>
+      <li><a href="/notice/2">关于征求重点领域研发计划专项申报指南意见的通知</a></li>
+    </body></html>
+    """
+    rules = {
+        "list_item": "li",
+        "detail_link": "a@href",
+        "detail_include_keywords": ["项目", "申报", "指南"],
+        "category": "项目申报",
+        "metadata": {"kind": "project_notice"},
+        "max_items": 10,
+    }
+
+    assert extract_list_follow_urls(html, "https://gov.example/list", rules) == [
+        "https://gov.example/notice/1",
+    ]
+
+
 def test_extract_list_follow_reads_javascript_onclick_detail_url() -> None:
     html = """
     <table>

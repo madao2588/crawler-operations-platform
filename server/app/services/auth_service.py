@@ -5,7 +5,13 @@ import binascii
 from datetime import UTC, datetime, timedelta
 
 from app.core.config import get_settings
-from app.core.security import generate_session_token, hash_password, verify_password
+from app.core.security import (
+    generate_session_token,
+    hash_password,
+    hash_session_token,
+    password_hash_needs_upgrade,
+    verify_password,
+)
 from app.models.auth import User, UserSession
 from app.repositories.auth_repo import AuthRepository
 from app.schemas.auth import (
@@ -15,6 +21,7 @@ from app.schemas.auth import (
     UserCreatePayload,
     UserRead,
 )
+from app.services.login_guard_service import LoginGuardService
 
 
 MAX_AVATAR_BYTES = 2 * 1024 * 1024
@@ -22,9 +29,10 @@ MAX_AVATAR_BASE64_CHARS = ((MAX_AVATAR_BYTES + 2) // 3) * 4
 
 
 class AuthService:
-    def __init__(self, auth_repo: AuthRepository):
+    def __init__(self, auth_repo: AuthRepository, login_guard: LoginGuardService | None = None):
         self.auth_repo = auth_repo
         self.settings = get_settings()
+        self.login_guard = login_guard or LoginGuardService()
 
     async def ensure_default_admin(self) -> None:
         username = (self.settings.bootstrap_admin_username or "").strip()
@@ -56,22 +64,39 @@ class AuthService:
         )
 
     async def login(self, payload: LoginPayload) -> AuthSessionRead:
+        self.login_guard.ensure_allowed(payload.username)
         user = await self.auth_repo.get_user_by_username(payload.username)
         if user is None:
+            self.login_guard.record_failure(payload.username)
             raise ValueError("用户名或密码不正确")
 
         if not verify_password(payload.password, user.password_salt, user.password_hash):
+            self.login_guard.record_failure(payload.username)
             raise ValueError("用户名或密码不正确")
         if not user.is_active:
             raise ValueError("账号已停用，请联系管理员")
 
+        if password_hash_needs_upgrade(user.password_salt):
+            upgraded_hash, upgraded_salt = hash_password(payload.password)
+            user = await self.auth_repo.update_user_password(
+                user,
+                password_hash=upgraded_hash,
+                password_salt=upgraded_salt,
+            )
+
         token = generate_session_token()
         expires_at = datetime.now(UTC) + timedelta(days=self.settings.session_ttl_days)
-        session_obj = await self.auth_repo.create_session(user, token, expires_at)
-        return self._build_session_response(user, session_obj)
+        session_obj = await self.auth_repo.create_session(
+            user,
+            hash_session_token(token),
+            expires_at,
+        )
+        self.login_guard.record_success(payload.username)
+        return self._build_session_response(user, session_obj, access_token=token)
 
     async def get_session(self, token: str) -> AuthSessionRead:
-        session_obj = await self.auth_repo.get_session_by_token(token)
+        token_hash = hash_session_token(token)
+        session_obj = await self.auth_repo.get_session_by_token(token_hash)
         if session_obj is None:
             raise PermissionError("登录已过期，请重新登录")
 
@@ -81,19 +106,19 @@ class AuthService:
             expires_at = session_obj.expires_at.astimezone(UTC)
 
         if expires_at <= datetime.now(UTC):
-            await self.auth_repo.delete_session_by_token(token)
+            await self.auth_repo.delete_session_by_token(token_hash)
             raise PermissionError("登录已过期，请重新登录")
 
         await self.auth_repo.touch_session(session_obj)
         user = await self.auth_repo.get_user_by_id(session_obj.user_id)
         if user is None or not user.is_active:
-            await self.auth_repo.delete_session_by_token(token)
+            await self.auth_repo.delete_session_by_token(token_hash)
             raise PermissionError("登录已失效，请重新登录")
 
-        return self._build_session_response(user, session_obj)
+        return self._build_session_response(user, session_obj, access_token=token)
 
     async def logout(self, token: str) -> None:
-        await self.auth_repo.delete_session_by_token(token)
+        await self.auth_repo.delete_session_by_token(hash_session_token(token))
 
     async def list_users(self) -> list[UserAdminRead]:
         users = await self.auth_repo.list_users()
@@ -190,9 +215,11 @@ class AuthService:
         self,
         user: User,
         session_obj: UserSession,
+        *,
+        access_token: str,
     ) -> AuthSessionRead:
         return AuthSessionRead(
-            access_token=session_obj.token,
+            access_token=access_token,
             expires_at=session_obj.expires_at,
             user=UserRead(
                 id=user.id,

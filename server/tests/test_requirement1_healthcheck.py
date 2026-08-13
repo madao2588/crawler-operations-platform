@@ -87,6 +87,95 @@ async def test_probe_source_reports_both_requirement_1_information_types(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_probe_source_marks_missing_result_publications_as_incomplete(monkeypatch) -> None:
+    template = _list_follow_template()
+    template["id"] = "most_project_declaration"
+
+    async def fake_fetch(url: str, _rules: dict[str, object]) -> tuple[str, str]:
+        if url.endswith("/notices"):
+            return (
+                '<ul class="list">'
+                '<li><a href="/notices/apply">2026年度科技项目申报通知</a></li>'
+                '<li><a href="/notices/apply-2">关于组织申报的补充说明</a></li>'
+                "</ul>",
+                "static",
+            )
+        return (
+            "<h1>2026年度科技项目申报通知</h1>"
+            "<div class='meta'>Published at: 2026-07-24</div>"
+            "<div class='body'><p>Project notice body.</p></div>",
+            "static",
+        )
+
+    monkeypatch.setattr(healthcheck, "_fetch", fake_fetch)
+
+    result = await healthcheck.probe_source(template)
+
+    assert result["status"] == "degraded"
+    assert result["failure_kind"] == "incomplete_requirement_coverage"
+    assert result["missing_signals"] == ["结果公示"]
+
+
+@pytest.mark.asyncio
+async def test_probe_source_uses_official_reference_to_verify_unobserved_signal(
+    monkeypatch,
+) -> None:
+    template = _list_follow_template()
+    template["id"] = "most_project_declaration"
+    reference_url = "https://gov.example/notices/historical-result"
+    monkeypatch.setattr(
+        healthcheck,
+        "PROJECT_SIGNAL_CAPABILITY_EVIDENCE",
+        {
+            "most_project_declaration": {
+                "结果公示": {
+                    "url": reference_url,
+                    "title": "关于重点专项2021年度拟立项项目安排公示的通知",
+                }
+            }
+        },
+    )
+
+    async def fake_fetch(url: str, _rules: dict[str, object]) -> tuple[str, str]:
+        if url.endswith("/notices"):
+            return (
+                '<ul class="list">'
+                '<li><a href="/notices/apply">2026年度科技项目申报通知</a></li>'
+                "</ul>",
+                "static",
+            )
+        if url == reference_url:
+            return (
+                "<h1>关于重点专项2021年度拟立项项目安排公示的通知</h1>"
+                "<div class='meta'>发布时间：2021年12月09日</div>"
+                "<div class='body'><p>现将拟立项项目信息进行公示。</p></div>",
+                "static",
+            )
+        return (
+            "<h1>2026年度科技项目申报通知</h1>"
+            "<div class='meta'>发布时间：2026年07月24日</div>"
+            "<div class='body'><p>项目申报正文。</p></div>",
+            "static",
+        )
+
+    monkeypatch.setattr(healthcheck, "_fetch", fake_fetch)
+
+    result = await healthcheck.probe_source(template)
+
+    assert result["status"] == "ok"
+    assert result["signal_counts"]["结果公示"] == 0
+    assert result["unobserved_signals"] == ["结果公示"]
+    assert result["missing_signals"] == []
+    assert result["verified_signal_evidence"]["结果公示"] == {
+        "url": reference_url,
+        "title": "关于重点专项2021年度拟立项项目安排公示的通知",
+        "published_at": "2021-12-08T16:00:00+00:00",
+        "content_length": len("现将拟立项项目信息进行公示。"),
+        "fetch_mode": "static",
+    }
+
+
+@pytest.mark.asyncio
 async def test_probe_source_reports_preferred_list_title(monkeypatch) -> None:
     template = _list_follow_template()
     rules = json.loads(template["parser_rules"])

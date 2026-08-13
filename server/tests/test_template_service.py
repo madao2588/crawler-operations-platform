@@ -221,6 +221,13 @@ def test_most_source_uses_application_notice_list_not_template_downloads() -> No
         "https://service.most.gov.cn/kjjh_tztg/",
         "https://service.most.gov.cn/sbtz_new/",
     ]
+    assert rules["list_url_template"] == (
+        "https://service.most.gov.cn/kjjh_tztg/index_{page}.html"
+    )
+    assert rules["list_page_from"] == 2
+    assert rules["list_page_to"] == 10
+    assert rules["max_list_pages"] == 11
+    assert rules["max_items"] == 110
     assert "https://service.most.gov.cn/sbwj_new/" not in rules["list_page_urls"]
 
 

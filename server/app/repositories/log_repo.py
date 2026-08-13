@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from datetime import datetime
 
 from sqlalchemy import distinct, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -93,3 +94,50 @@ class LogRepository:
             .where(LogEntry.level == "ERROR", LogEntry.task_id.is_not(None))
         )
         return await self.session.scalar(statement) or 0
+
+    async def get_latest_run_summary(
+        self,
+        *,
+        task_id: int,
+        created_after: datetime,
+    ) -> LogEntry | None:
+        statement = (
+            select(LogEntry)
+            .where(
+                LogEntry.task_id == task_id,
+                LogEntry.created_at >= created_after,
+                LogEntry.run_summary.is_not(None),
+            )
+            .order_by(LogEntry.id.desc())
+            .limit(1)
+        )
+        return await self.session.scalar(statement)
+
+    async def get_latest_error(
+        self,
+        *,
+        task_id: int,
+        run_id: str,
+        created_after: datetime,
+    ) -> LogEntry | None:
+        statement = (
+            select(LogEntry)
+            .where(
+                LogEntry.task_id == task_id,
+                LogEntry.level == "ERROR",
+                LogEntry.created_at >= created_after,
+                LogEntry.message.contains(f"[run={run_id}]"),
+            )
+            .order_by(LogEntry.id.desc())
+            .limit(1)
+        )
+        return await self.session.scalar(statement)
+
+    async def delete_older_than(self, *, older_than: datetime) -> int:
+        statement = select(LogEntry).where(LogEntry.created_at < older_than)
+        result = await self.session.execute(statement)
+        rows = result.scalars().all()
+        for row in rows:
+            await self.session.delete(row)
+        await self.session.commit()
+        return len(rows)

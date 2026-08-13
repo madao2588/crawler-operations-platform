@@ -19,6 +19,7 @@ _MEETING_TITLE_MARKERS = (
     "展会",
     "活动",
 )
+_MEETING_ACTION_MARKERS = ("举办", "召开", "举行")
 _TRAILING_PUNCTUATION = " \t\r\n。；;，,"
 _REGISTRATION_TEXT_MARKERS = ("报名", "注册", "参会", "购票", "预订", "立即参加")
 _OFFICIAL_TEXT_MARKERS = ("官网", "官方网站", "会议网址", "大会网址", "官方入口")
@@ -161,13 +162,16 @@ def extract_meeting_metadata(
 
 def is_valid_meeting_record(title: str | None, metadata: dict[str, str]) -> bool:
     normalized_title = (title or "").strip()
-    has_meeting_title = any(marker in normalized_title for marker in _MEETING_TITLE_MARKERS)
     has_core_field = bool(
         metadata.get("meeting_date")
         or metadata.get("location")
         or metadata.get("start_date")
     )
-    return has_meeting_title and has_core_field
+    has_meeting_title = any(marker in normalized_title for marker in _MEETING_TITLE_MARKERS)
+    has_hosting_title = has_core_field and any(
+        marker in normalized_title for marker in _MEETING_ACTION_MARKERS
+    )
+    return (has_meeting_title or has_hosting_title) and has_core_field
 
 
 def extract_meeting_table_records(

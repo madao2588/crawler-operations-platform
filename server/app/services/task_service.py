@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
 from apscheduler.jobstores.base import JobLookupError
@@ -11,6 +12,7 @@ from app.repositories.log_repo import LogRepository
 from app.repositories.task_repo import TaskRepository
 from app.schemas.common import EmptyPayload, PageData
 from app.schemas.task import (
+    DeferredTaskPayload,
     RunAllEnabledPayload,
     TaskCreate,
     TaskRead,
@@ -21,6 +23,8 @@ from app.schemas.task import (
 from app.schemas.template import ManualCollectionRead
 from app.services.crawl_service import CrawlService, TaskRunConflictError, dispatch_task_run
 from app.services.template_service import NEW_DRUG_SOURCE_TEMPLATES
+from app.utils.url_security import UnsafeTargetError, assert_safe_outbound_url, normalize_allowed_hosts
+from app.utils.task_retry import is_retry_backoff_active
 
 
 DEMO_TASK_START_URLS = frozenset(
@@ -147,24 +151,26 @@ class TaskService:
             raise ValueError(f"Source {source_id} does not support manual collection")
 
         parsed_url = urlparse(url.strip())
-        allowed_hosts = {
-            str(host).lower()
-            for host in rules.get("allowed_hosts", [])
-            if isinstance(host, str)
-        }
+        allowed_hosts = normalize_allowed_hosts(
+            host for host in rules.get("allowed_hosts", []) if isinstance(host, str)
+        )
         if (
             parsed_url.scheme not in {"http", "https"}
             or not parsed_url.hostname
-            or parsed_url.hostname.lower() not in allowed_hosts
+            or parsed_url.hostname.lower().rstrip(".") not in allowed_hosts
         ):
             allowed = ", ".join(sorted(allowed_hosts)) or "configured source host"
             raise ValueError(f"Manual source URL must use {allowed}")
+        try:
+            safe_url = assert_safe_outbound_url(url.strip())
+        except UnsafeTargetError as exc:
+            raise ValueError(str(exc)) from exc
 
         task = await self.task_repo.get_by_name(str(source["name"]))
         if task is None:
             raise LookupError(f"Task for source {source_id} not found")
 
-        result = await self.crawl_service.collect_manual_url(task.id, url.strip())
+        result = await self.crawl_service.collect_manual_url(task.id, safe_url)
         return ManualCollectionRead(source_id=source_id, **result)
 
     async def run_all_enabled_tasks_now(self) -> RunAllEnabledPayload:
@@ -172,8 +178,27 @@ class TaskService:
         queued: list[int] = []
         skipped: list[int] = []
         recovered: list[int] = []
+        deferred: list[DeferredTaskPayload] = []
         errors: list[str] = []
+        current = datetime.now(timezone.utc)
         for task in enabled_tasks:
+            backoff_active, failure_kind, next_retry_at = is_retry_backoff_active(
+                now=current,
+                last_run_status=getattr(task, "last_run_status", None),
+                last_run_at=getattr(task, "last_run_at", None),
+                last_error_message=getattr(task, "last_error_message", None),
+            )
+            if backoff_active and failure_kind and next_retry_at is not None:
+                deferred.append(
+                    DeferredTaskPayload(
+                        task_id=task.id,
+                        task_name=task.name,
+                        failure_kind=failure_kind,
+                        next_retry_at=next_retry_at,
+                        retry_in_seconds=max(0, int((next_retry_at - current).total_seconds())),
+                    )
+                )
+                continue
             try:
                 result = await self.crawl_service.trigger_now(task.id)
                 queued.append(task.id)
@@ -189,7 +214,7 @@ class TaskService:
             message=(
                 "bulk run-enabled: "
                 f"queued={len(queued)} skipped={len(skipped)} "
-                f"recovered={len(recovered)} errors={len(errors)}"
+                f"recovered={len(recovered)} deferred={len(deferred)} errors={len(errors)}"
             ),
         )
         return RunAllEnabledPayload(
@@ -197,6 +222,7 @@ class TaskService:
             skipped_task_ids=skipped,
             recovered_task_ids=recovered,
             quarantined_task_ids=[],
+            deferred_tasks=deferred,
             errors=errors,
         )
 
@@ -212,6 +238,65 @@ class TaskService:
                     message=f"Failed to load scheduled task {task.id}",
                     error_stack=str(exc),
                 )
+
+    async def catch_up_stale_tasks(
+        self,
+        *,
+        now: datetime | None = None,
+        stale_after: timedelta = timedelta(hours=24),
+    ) -> RunAllEnabledPayload:
+        current = now or datetime.now(timezone.utc)
+        stale_tasks = await self.task_repo.list_stale_enabled(
+            stale_before=current - stale_after,
+        )
+        queued: list[int] = []
+        skipped: list[int] = []
+        deferred: list[DeferredTaskPayload] = []
+        errors: list[str] = []
+        for task in stale_tasks:
+            backoff_active, failure_kind, next_retry_at = is_retry_backoff_active(
+                now=current,
+                last_run_status=getattr(task, "last_run_status", None),
+                last_run_at=getattr(task, "last_run_at", None),
+                last_error_message=getattr(task, "last_error_message", None),
+            )
+            if backoff_active and failure_kind and next_retry_at is not None:
+                deferred.append(
+                    DeferredTaskPayload(
+                        task_id=task.id,
+                        task_name=task.name,
+                        failure_kind=failure_kind,
+                        next_retry_at=next_retry_at,
+                        retry_in_seconds=max(0, int((next_retry_at - current).total_seconds())),
+                    )
+                )
+                continue
+            try:
+                await self.crawl_service.trigger_now(task.id)
+                queued.append(task.id)
+            except TaskRunConflictError:
+                skipped.append(task.id)
+            except (LookupError, RuntimeError) as exc:
+                errors.append(f"task {task.id}: {exc}")
+
+        await self.log_repo.create(
+            level="WARNING" if errors else "INFO",
+            task_id=None,
+            message=(
+                "startup catch-up: "
+                f"queued={len(queued)} skipped={len(skipped)} "
+                f"deferred={len(deferred)} errors={len(errors)}"
+            ),
+            error_stack="\n".join(errors) if errors else None,
+        )
+        return RunAllEnabledPayload(
+            queued_task_ids=queued,
+            skipped_task_ids=skipped,
+            recovered_task_ids=[],
+            quarantined_task_ids=[],
+            deferred_tasks=deferred,
+            errors=errors,
+        )
 
     async def ensure_example_task(self) -> TaskRead | None:
         if await self.task_repo.count_all() > 0:
@@ -291,6 +376,8 @@ class TaskService:
             id=self._job_id(task.id),
             replace_existing=True,
             coalesce=True,
+            max_instances=1,
+            misfire_grace_time=3600,
         )
 
     async def _get_task_or_raise(self, task_id: int) -> Task:

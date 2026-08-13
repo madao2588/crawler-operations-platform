@@ -70,6 +70,10 @@ def test_avatar_update_persists_across_login_and_can_be_cleared(
     me = client.get("/v1/auth/me", headers=headers)
     assert me.json()["data"]["user"]["avatar_base64"] == avatar
 
+    lean_me = client.get("/v1/auth/me?include_avatar=false", headers=headers)
+    assert lean_me.status_code == 200
+    assert lean_me.json()["data"]["user"]["avatar_base64"] is None
+
     relogin = client.post(
         "/v1/auth/login",
         json={"username": username, "password": password},

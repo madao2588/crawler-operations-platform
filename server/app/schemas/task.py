@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field, field_serializer, field_validator
 from app.schemas.serialization import dt_to_utc_iso_z
 
 from app.schemas.parser_rules import validate_parser_rules_str
+from app.utils.url_security import UnsafeTargetError, validate_public_http_url
 
 
 class TaskStatus(IntEnum):
@@ -23,9 +24,10 @@ class TaskBase(BaseModel):
     @field_validator("start_url")
     @classmethod
     def validate_start_url(cls, value: str) -> str:
-        if not value.startswith(("http://", "https://")):
-            raise ValueError("start_url must start with http:// or https://")
-        return value
+        try:
+            return validate_public_http_url(value)
+        except UnsafeTargetError as exc:
+            raise ValueError(str(exc)) from exc
 
     @field_validator("parser_rules")
     @classmethod
@@ -47,8 +49,12 @@ class TaskUpdate(BaseModel):
     @field_validator("start_url")
     @classmethod
     def validate_start_url(cls, value: str | None) -> str | None:
-        if value is not None and not value.startswith(("http://", "https://")):
-            raise ValueError("start_url must start with http:// or https://")
+        if value is None:
+            return None
+        try:
+            return validate_public_http_url(value)
+        except UnsafeTargetError as exc:
+            raise ValueError(str(exc)) from exc
         return value
 
     @field_validator("parser_rules")
@@ -78,6 +84,14 @@ class TaskRunPayload(BaseModel):
     recovered_stale_run: bool = False
 
 
+class DeferredTaskPayload(BaseModel):
+    task_id: int
+    task_name: str
+    failure_kind: str
+    next_retry_at: datetime
+    retry_in_seconds: int = Field(..., ge=0)
+
+
 class RunAllEnabledPayload(BaseModel):
     """Result of enqueueing a manual run for every enabled task."""
 
@@ -85,4 +99,5 @@ class RunAllEnabledPayload(BaseModel):
     skipped_task_ids: list[int] = Field(default_factory=list)
     recovered_task_ids: list[int] = Field(default_factory=list)
     quarantined_task_ids: list[int] = Field(default_factory=list)
+    deferred_tasks: list[DeferredTaskPayload] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)

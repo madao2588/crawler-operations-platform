@@ -44,6 +44,7 @@ export function AuthProvider({ children, clientFactory = defaultClientFactory }:
   const [session, setSession] = useState<AuthSession | null>(initialSessionRef.current)
   const [status, setStatus] = useState<AuthStatus>('loading')
   const sessionRef = useRef<AuthSession | null>(initialSessionRef.current)
+  const validationRequestRef = useRef<Promise<ApiAuthSession> | null>(null)
 
   const resetSession = useCallback(() => {
     clearSession()
@@ -57,8 +58,8 @@ export function AuthProvider({ children, clientFactory = defaultClientFactory }:
     [clientFactory, resetSession],
   )
 
-  const applySession = useCallback((raw: ApiAuthSession) => {
-    const next = mapSession(raw)
+  const applySession = useCallback((raw: ApiAuthSession, avatarFallback?: string | null) => {
+    const next = mapSession(raw, avatarFallback)
     saveSession(next)
     sessionRef.current = next
     setSession(next)
@@ -72,10 +73,10 @@ export function AuthProvider({ children, clientFactory = defaultClientFactory }:
       return
     }
     let active = true
-    client
-      .get<ApiAuthSession>('/v1/auth/me')
+    validationRequestRef.current ??= client.get<ApiAuthSession>('/v1/auth/me?include_avatar=false')
+    validationRequestRef.current
       .then((raw) => {
-        if (active) applySession(raw)
+        if (active) applySession(raw, stored.user.avatarBase64)
       })
       .catch(() => {
         if (active) resetSession()
@@ -144,14 +145,14 @@ function defaultClientFactory(getToken: () => string | null, onUnauthorized: () 
   return new ApiClient({ getToken, onUnauthorized })
 }
 
-function mapSession(raw: ApiAuthSession): AuthSession {
+function mapSession(raw: ApiAuthSession, avatarFallback?: string | null): AuthSession {
   return {
     accessToken: raw.access_token,
     expiresAt: raw.expires_at,
     user: {
       id: raw.user.id,
       username: raw.user.username,
-      avatarBase64: raw.user.avatar_base64,
+      avatarBase64: avatarFallback === undefined ? raw.user.avatar_base64 : avatarFallback,
       role: raw.user.role,
       isActive: raw.user.is_active,
     },

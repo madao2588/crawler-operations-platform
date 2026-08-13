@@ -106,4 +106,15 @@ describe('ApiClient', () => {
     await Promise.allSettled([client.get('/v1/notices'), client.get('/v1/dashboard/overview')])
     expect(onUnauthorized).toHaveBeenCalledTimes(1)
   })
+
+  it('identifies the failed request when the backend cannot be reached', async () => {
+    const client = new ApiClient({
+      fetcher: vi.fn<typeof fetch>().mockRejectedValue(new TypeError('Failed to fetch')),
+    })
+
+    await expect(client.get('/v1/dashboard/overview')).rejects.toMatchObject({
+      message:
+        '无法连接后端（GET /v1/dashboard/overview）：服务未响应。请确认 npm start 正在运行后重试。',
+    })
+  })
 })

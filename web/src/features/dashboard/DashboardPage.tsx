@@ -1,11 +1,13 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { RefreshCw } from 'lucide-react'
+import { AlertTriangle, ChevronRight, RefreshCw } from 'lucide-react'
 import { buildNoticeUrl, useNavigate } from '../../app/router'
 import { useAuth } from '../../auth/AuthProvider'
-import { PageToolbar } from '../../components/UiPrimitives'
+import { DetailDrawer, PageToolbar } from '../../components/UiPrimitives'
 import { dashboardOverviewQueryKey, fetchDashboardOverview } from './dashboard.api'
-import type { DashboardOverview, KeywordHeatItem, NoticeListItem, ProjectSignalItem, SourceDistributionItem } from './dashboard.types'
+import type { DashboardCollectionIssue, DashboardOverview, KeywordHeatItem, NoticeListItem, ProjectSignalItem, SourceDistributionItem } from './dashboard.types'
+import { COLLECTION_COMPLETENESS_HELP, collectionCompletenessLabel } from '../../utils/completeness'
+import type { RunAllEnabledResult } from '../system/types'
 import './dashboard.css'
 
 export function DashboardPage() {
@@ -83,12 +85,17 @@ export function DashboardPage() {
         isRefreshing={overviewQuery.isRefetching}
       />
 
+      <CollectionHealthAlert
+        health={overview.collectionHealth}
+        onRefresh={() => overviewQuery.refetch()}
+      />
+
       <section className="dashboard-grid" aria-label="公告总览指标">
         <MetricCard
-          title="今日新增公告"
+          title="今日发布公告"
           value={overview.metrics.todayNewNotices}
           tone="primary"
-          onClick={() => navigate(buildNoticeUrl({ capturedToday: true }))}
+          onClick={() => navigate(buildNoticeUrl({ businessToday: true }))}
         />
         <MetricCard
           title="申报通知"
@@ -176,6 +183,173 @@ export function DashboardPage() {
       </div>
     </section>
   )
+}
+
+function CollectionHealthAlert({
+  health,
+  onRefresh,
+}: {
+  health: DashboardOverview['collectionHealth']
+  onRefresh: () => Promise<unknown>
+}) {
+  const { client, session } = useAuth()
+  const [detailsOpen, setDetailsOpen] = useState(false)
+  const [rerunningTaskId, setRerunningTaskId] = useState<number | null>(null)
+  const [bulkRunning, setBulkRunning] = useState(false)
+  const [feedback, setFeedback] = useState<{ tone: 'success' | 'error'; message: string } | null>(null)
+  if (health.status !== 'warning' && health.status !== 'error') return null
+  const isStale = health.staleTaskCount > 0
+  const freshness = health.lastSuccessAt
+    ? `数据截至 ${formatFullDateTime(health.lastSuccessAt)}`
+    : '尚无成功采集记录'
+  const issues = [
+    health.failedTaskCount > 0 ? `${health.failedTaskCount} 个来源最近运行失败` : null,
+    health.partialTaskCount > 0 ? `${health.partialTaskCount} 个来源本次部分失败` : null,
+    health.staleTaskCount > 0 ? `${health.staleTaskCount} 个来源超过 24 小时未成功更新` : null,
+  ].filter((item): item is string => item !== null)
+  const issueGroups = groupCollectionIssues(health.issues)
+
+  async function rerun(taskId: number, taskName: string) {
+    if (rerunningTaskId !== null || bulkRunning) return
+    setRerunningTaskId(taskId)
+    setFeedback(null)
+    try {
+      await client.post(`/v1/tasks/${taskId}/run`)
+      setFeedback({ tone: 'success', message: `${taskName}已提交重跑，可在系统管理查看进度。` })
+    } catch (error) {
+      setFeedback({ tone: 'error', message: `重跑失败：${getErrorMessage(error)}` })
+    } finally {
+      setRerunningTaskId(null)
+    }
+  }
+
+  async function runAllEnabled() {
+    if (bulkRunning || rerunningTaskId !== null) return
+    setBulkRunning(true)
+    setFeedback(null)
+    try {
+      const result = await client.post<RunAllEnabledResult>('/v1/tasks/run-enabled')
+      setFeedback({
+        tone: result.errors.length ? 'error' : 'success',
+        message: summarizeBulkRun(result),
+      })
+      await onRefresh()
+    } catch (error) {
+      setFeedback({ tone: 'error', message: `批量更新失败：${getErrorMessage(error)}` })
+    } finally {
+      setBulkRunning(false)
+    }
+  }
+
+  return (
+    <>
+      <div className="dashboard-collection-alert" role="alert">
+        <AlertTriangle aria-hidden="true" />
+        <div className="dashboard-collection-alert__copy">
+          <div className="dashboard-collection-alert__headline">
+            <strong>{isStale ? '采集数据已过期' : '采集运行异常'}</strong>
+            <span>{issues.join(' · ')}</span>
+          </div>
+          <span className="dashboard-collection-alert__freshness">{freshness}</span>
+        </div>
+        <div className="dashboard-collection-alert__actions">
+          {session?.user.role === 'admin' ? (
+            <button
+              type="button"
+              className="dashboard-collection-alert__bulk"
+              disabled={bulkRunning || rerunningTaskId !== null}
+              onClick={() => void runAllEnabled()}
+            >
+              <RefreshCw aria-hidden="true" className={bulkRunning ? 'is-spinning' : ''} />
+              {bulkRunning ? '正在更新' : '更新全部来源'}
+            </button>
+          ) : null}
+          {health.issues.length ? (
+            <button
+              type="button"
+              className="dashboard-collection-alert__details-button"
+              aria-haspopup="dialog"
+              onClick={() => setDetailsOpen(true)}
+            >
+              查看 {health.issues.length} 个异常
+              <ChevronRight aria-hidden="true" />
+            </button>
+          ) : null}
+        </div>
+      </div>
+
+      {feedback ? (
+        <div className={`dashboard-collection-alert__feedback is-${feedback.tone}`} role="status">
+          {feedback.message}
+        </div>
+      ) : null}
+
+      <DetailDrawer
+        open={detailsOpen}
+        title="采集异常详情"
+        description={`${issues.join('；')}。${freshness}`}
+        width="wide"
+        onClose={() => setDetailsOpen(false)}
+      >
+        <div className="dashboard-collection-details">
+          {issueGroups.map((group) => (
+            <section className="dashboard-collection-details__group" key={group.reason}>
+              <header className="dashboard-collection-details__group-header">
+                <div>
+                  <span>失败原因</span>
+                  <h3>{group.reason}</h3>
+                </div>
+                <strong>{group.issues.length} 个来源</strong>
+              </header>
+              <div className="dashboard-collection-details__list">
+                {group.issues.map((issue) => (
+                  <div className="dashboard-collection-details__item" key={issue.taskId}>
+                    <span className="dashboard-collection-details__name">{issue.taskName}</span>
+                    <div className="dashboard-collection-details__states">
+                      <span className={`dashboard-collection-alert__status is-${issue.status}`}>
+                        {collectionIssueLabel(issue.status)}
+                      </span>
+                      {issue.isStale ? <span className="dashboard-collection-alert__status is-stale">已过期</span> : null}
+                    </div>
+                    {session?.user.role === 'admin' ? (
+                      <button
+                        type="button"
+                        className="dashboard-collection-alert__retry"
+                        aria-label={`重新运行 ${issue.taskName}`}
+                        disabled={rerunningTaskId !== null || bulkRunning}
+                        onClick={() => void rerun(issue.taskId, issue.taskName)}
+                      >
+                        <RefreshCw aria-hidden="true" className={rerunningTaskId === issue.taskId ? 'is-spinning' : ''} />
+                        {rerunningTaskId === issue.taskId ? '提交中' : '重新运行'}
+                      </button>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      </DetailDrawer>
+    </>
+  )
+}
+
+function groupCollectionIssues(issues: DashboardCollectionIssue[]) {
+  const groups = new Map<string, DashboardCollectionIssue[]>()
+  issues.forEach((issue) => {
+    const reason = issue.reason.trim() || '未提供具体失败原因'
+    groups.set(reason, [...(groups.get(reason) ?? []), issue])
+  })
+  return Array.from(groups, ([reason, groupedIssues]) => ({ reason, issues: groupedIssues }))
+}
+
+function summarizeBulkRun(result: RunAllEnabledResult) {
+  const messages: string[] = []
+  if (result.queued_task_ids.length) messages.push(`已提交 ${result.queued_task_ids.length} 个来源`)
+  if (result.skipped_task_ids.length) messages.push(`${result.skipped_task_ids.length} 个正在运行的来源已跳过`)
+  if (result.recovered_task_ids.length) messages.push(`${result.recovered_task_ids.length} 个卡住的任务已恢复`)
+  if (result.errors.length) messages.push(`${result.errors.length} 个来源提交失败`)
+  return messages.length ? `${messages.join('，')}。` : '当前没有可更新的启用来源。'
 }
 
 function Hero({
@@ -268,7 +442,9 @@ function NoticeList({
           <span className="dashboard-list-button__meta">
             <span>{item.projectSignal !== '其他项目线索' ? item.projectSignal : item.category}</span>
             <span>{sourceDisplayNames.get(item.sourceSite) ?? '未命名来源'}</span>
-            <span>质量 {item.qualityScore}</span>
+            <span title={COLLECTION_COMPLETENESS_HELP} aria-label={collectionCompletenessLabel(item.qualityScore)}>
+              {collectionCompletenessLabel(item.qualityScore)}
+            </span>
           </span>
         </button>
       ))}
@@ -383,6 +559,12 @@ function runtimeStatusLabel(value?: string) {
   return value?.trim() || '未知'
 }
 
+function collectionIssueLabel(status: string) {
+  if (status === 'partial') return '部分完成'
+  if (status === 'stale') return '未及时更新'
+  return '运行失败'
+}
+
 function LoadingState() {
   return (
     <section className="dashboard-loading" aria-live="polite">
@@ -454,5 +636,18 @@ function formatDateTime(value: string) {
     day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
+  }).format(date)
+}
+
+function formatFullDateTime(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
   }).format(date)
 }

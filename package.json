@@ -10,7 +10,9 @@
     "stop": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/dev-down.ps1",
     "stop:flutter": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/dev-down.ps1",
     "test:start": "node --test ./scripts/tests/npm-start.test.mjs",
+    "delivery:check": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/delivery-check.ps1",
     "test:web": "npm --prefix ./web test",
-    "build:web": "npm --prefix ./web run build"
+    "build:web": "npm --prefix ./web run build",
+    "deploy:config": "docker compose --env-file ./.env.production.example -f ./compose.production.yml config"
   }
 }

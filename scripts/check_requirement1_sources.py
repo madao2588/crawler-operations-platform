@@ -31,11 +31,18 @@ from app.engine.parser import (
 from app.services.template_service import (
     NEW_DRUG_SOURCE_TEMPLATES,
     PROJECT_DECLARATION_ENABLED_TEMPLATE_IDS,
+    PROJECT_SIGNAL_CAPABILITY_EVIDENCE,
 )
 from app.utils.notice import project_notice_kind
 from app.utils.published_at import parse_published_at
 
 PROJECT_SIGNAL_LABELS = ("申报通知", "结果公示", "其他项目线索")
+
+
+def _required_signals_for_source(source_id: str) -> tuple[str, ...]:
+    if source_id in PROJECT_DECLARATION_ENABLED_TEMPLATE_IDS:
+        return ("申报通知", "结果公示")
+    return ()
 
 
 async def _fetch(url: str, rules: dict[str, object]) -> tuple[str, str]:
@@ -74,6 +81,42 @@ async def _fetch(url: str, rules: dict[str, object]) -> tuple[str, str]:
             ) from dynamic_exc
 
 
+async def _verify_signal_evidence(
+    source_id: str,
+    signal: str,
+    rules: dict[str, object],
+) -> dict[str, object] | None:
+    evidence = PROJECT_SIGNAL_CAPABILITY_EVIDENCE.get(source_id, {}).get(signal)
+    if evidence is None:
+        return None
+
+    url = str(evidence["url"])
+    html, fetch_mode = await _fetch(url, rules)
+    raw_detail_rules = detail_rules_json(rules)
+    detail_rules = json.loads(raw_detail_rules) if raw_detail_rules else {}
+    parsed = parse_with_rules(html, detail_rules)
+    cleaned = clean_content(parsed.get("content_html"))
+    title = str(parsed.get("title") or evidence.get("title") or "").strip()
+    published_at = parse_published_at(parsed.get("published_at"))
+    detected_signal = project_notice_kind(
+        [title, cleaned["content_text"]],
+        metadata={"kind": "project_notice"},
+    )
+    if detected_signal != signal:
+        raise ValueError(
+            f"official capability evidence classified as {detected_signal}, expected {signal}"
+        )
+    if not title or not cleaned["content_text"] or published_at is None:
+        raise ValueError("official capability evidence is missing title, content, or published_at")
+    return {
+        "url": url,
+        "title": title,
+        "published_at": published_at.isoformat(),
+        "content_length": len(cleaned["content_text"]),
+        "fetch_mode": fetch_mode,
+    }
+
+
 async def probe_source(template: dict[str, Any]) -> dict[str, Any]:
     source_id = str(template["id"])
     result: dict[str, Any] = {
@@ -86,6 +129,10 @@ async def probe_source(template: dict[str, Any]) -> dict[str, Any]:
         "matched_items": 0,
         "signal_counts": {label: 0 for label in PROJECT_SIGNAL_LABELS},
         "signal_samples": {label: [] for label in PROJECT_SIGNAL_LABELS},
+        "unobserved_signals": [],
+        "missing_signals": [],
+        "verified_signal_evidence": {},
+        "signal_evidence_errors": {},
         "detail_url": None,
         "detail_title": None,
         "published_at": None,
@@ -150,6 +197,26 @@ async def probe_source(template: dict[str, Any]) -> dict[str, Any]:
             samples = result["signal_samples"][signal]
             if title and len(samples) < 2:
                 samples.append(title)
+        unobserved_signals = [
+            label
+            for label in _required_signals_for_source(source_id)
+            if result["signal_counts"][label] == 0
+        ]
+        result["unobserved_signals"] = unobserved_signals
+        missing_signals: list[str] = []
+        for signal in unobserved_signals:
+            try:
+                verified = await _verify_signal_evidence(source_id, signal, rules)
+            except Exception as exc:  # noqa: BLE001 - report evidence failures by signal
+                verified = None
+                result["signal_evidence_errors"][signal] = (
+                    f"{type(exc).__name__}: {exc}"
+                )
+            if verified is None:
+                missing_signals.append(signal)
+            else:
+                result["verified_signal_evidence"][signal] = verified
+        result["missing_signals"] = missing_signals
 
         detail = discovered[0]
         detail_url = detail["url"]
@@ -210,6 +277,7 @@ async def probe_source(template: dict[str, Any]) -> dict[str, Any]:
                     and cleaned["content_text"]
                     and published_at
                     and list_page_failures == 0
+                    and not result.get("missing_signals")
                     else "degraded"
                 ),
                 "fetch_mode": f"{result['fetch_mode']}->{detail_fetch_mode}",
@@ -221,11 +289,15 @@ async def probe_source(template: dict[str, Any]) -> dict[str, Any]:
             }
         )
         if result["status"] == "degraded":
-            result["failure_kind"] = "parse_drift"
-            result["error"] = (
-                "one or more list pages failed, or the detail contract did not "
-                "return title, content, and published_at"
-            )
+            if result.get("missing_signals"):
+                result["failure_kind"] = "incomplete_requirement_coverage"
+                result["error"] = "missing required Requirement 1 information types"
+            else:
+                result["failure_kind"] = "parse_drift"
+                result["error"] = (
+                    "one or more list pages failed, or the detail contract did not "
+                    "return title, content, and published_at"
+                )
     except Exception as exc:  # noqa: BLE001 - isolate each external source in the report
         result["failure_kind"] = _classify_failure(exc, result["list_pages"])
         result["error"] = f"{type(exc).__name__}: {exc}"

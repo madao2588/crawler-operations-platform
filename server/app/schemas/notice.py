@@ -31,6 +31,7 @@ class NoticeListItem(BaseModel):
     ai_summary: str | None = None
     review_status: str = "待关注"
     is_archived: bool = False
+    is_focused: bool = False
     remark: str | None = None
     task_id: int
 

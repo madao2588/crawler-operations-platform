@@ -74,6 +74,53 @@ def test_put_task_update_name(asgi_test_client: TestClient, auth_headers: dict[s
     assert client.delete(f"/v1/tasks/{task_id}", headers=headers).status_code == 200
 
 
+def test_create_task_rejects_localhost_start_url(
+    asgi_test_client: TestClient,
+    auth_headers: dict[str, str],
+) -> None:
+    response = asgi_test_client.post(
+        "/v1/tasks",
+        json={
+            "name": f"pytest_ssrf_{uuid.uuid4().hex[:10]}",
+            "start_url": "http://127.0.0.1:8000/internal",
+            "cron_expr": "0 0 * * *",
+            "status": 1,
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 422
+    assert "not a public address" in response.text or "not allowed" in response.text
+
+
+def test_update_task_rejects_link_local_start_url(
+    asgi_test_client: TestClient,
+    auth_headers: dict[str, str],
+) -> None:
+    created = asgi_test_client.post(
+        "/v1/tasks",
+        json={
+            "name": f"pytest_ssrf_update_{uuid.uuid4().hex[:10]}",
+            "start_url": "https://example.com/safe",
+            "cron_expr": "0 0 * * *",
+            "status": 1,
+        },
+        headers=auth_headers,
+    )
+    assert created.status_code == 200
+    task_id = created.json()["data"]["id"]
+
+    response = asgi_test_client.put(
+        f"/v1/tasks/{task_id}",
+        json={"start_url": "http://169.254.169.254/latest/meta-data"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 422
+    assert "not a public address" in response.text or "not allowed" in response.text
+    assert asgi_test_client.delete(f"/v1/tasks/{task_id}", headers=auth_headers).status_code == 200
+
+
 async def _slow_pipeline_run(_task_id: int) -> None:
     await asyncio.sleep(1.0)
 

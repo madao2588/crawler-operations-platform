@@ -143,7 +143,7 @@ def test_notice_review_patch_updates_information_pool_metadata(
     patched = asgi_test_client.patch(
         f"/v1/notices/{notice_id}/review",
         json={
-            "review_status": "有效",
+            "review_status": "重点关注",
             "is_archived": True,
             "remark": "纳入新药部归档库",
         },
@@ -151,9 +151,17 @@ def test_notice_review_patch_updates_information_pool_metadata(
     )
     assert patched.status_code == 200
     data = patched.json()["data"]
-    assert data["review_status"] == "有效"
+    assert data["review_status"] == "重点关注"
     assert data["is_archived"] is True
     assert data["remark"] == "纳入新药部归档库"
+
+    focused = asgi_test_client.get(
+        "/v1/notices",
+        params={"review_status": "重点关注"},
+        headers=auth_headers,
+    )
+    assert focused.status_code == 200
+    assert notice_id in {item["id"] for item in focused.json()["data"]["items"]}
 
 
 def test_stats_overview_shape(asgi_test_client: TestClient, auth_headers: dict[str, str]) -> None:

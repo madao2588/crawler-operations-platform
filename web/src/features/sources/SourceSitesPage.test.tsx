@@ -235,6 +235,7 @@ describe('SourceSitesPage', () => {
     await user.type(within(createDialog).getByLabelText('标签'), '政策, 药监')
     await user.click(within(createDialog).getByRole('button', { name: '在线测试' }))
     expect(await within(createDialog).findByText(/测试抓取标题/)).toBeInTheDocument()
+    expect(within(createDialog).getByText(/采集完整度：82/)).toBeInTheDocument()
     await user.click(within(createDialog).getByRole('button', { name: '保存模板' }))
     expect(await screen.findByText('药监局公告')).toBeInTheDocument()
 

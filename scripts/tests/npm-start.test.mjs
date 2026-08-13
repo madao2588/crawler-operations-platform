@@ -8,6 +8,7 @@ const testDirectory = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(testDirectory, '..', '..');
 const packagePath = path.join(repositoryRoot, 'package.json');
 const workspacePackagePath = path.resolve(repositoryRoot, '..', 'package.json');
+const reactPackagePath = path.join(repositoryRoot, 'web', 'package.json');
 const devUpPath = path.join(repositoryRoot, 'scripts', 'dev-up.ps1');
 const pythonWrapperPath = path.join(repositoryRoot, 'scripts', 'pythonw.ps1');
 const composePath = path.join(repositoryRoot, 'docker-compose.yml');
@@ -52,6 +53,12 @@ test('combined launcher supports React mode directly', () => {
   assert.match(launcher, /LAN URL:/);
 });
 
+test('combined launcher is the single source of React host and port arguments', () => {
+  const packageJson = JSON.parse(readFileSync(reactPackagePath, 'utf8'));
+
+  assert.equal(packageJson.scripts?.dev, 'vite');
+});
+
 test('combined launcher waits for backend health before exposing the frontend', () => {
   const launcher = readFileSync(devUpPath, 'utf8');
   const backendHealthWait = launcher.indexOf(
@@ -66,6 +73,29 @@ test('combined launcher waits for backend health before exposing the frontend', 
   assert.ok(
     backendHealthWait < frontendStart,
     'frontend must not start until the backend health endpoint is ready',
+  );
+});
+
+test('combined launcher keeps the current frontend available while the backend restarts', () => {
+  const launcher = readFileSync(devUpPath, 'utf8');
+  const backendHealthWait = launcher.indexOf(
+    'Wait-ForHttpOk -Url "http://127.0.0.1:$BackendPort/health"',
+  );
+  const frontendStart = launcher.indexOf(
+    'Write-Host "Starting frontend ($FrontendMode) on http://127.0.0.1:$FrontendPort ..."',
+  );
+
+  assert.notEqual(backendHealthWait, -1, 'backend health wait must exist');
+  assert.notEqual(frontendStart, -1, 'frontend startup must exist');
+  assert.doesNotMatch(
+    launcher.slice(0, backendHealthWait),
+    /Stop-PortProcesses -Port \$FrontendPort/,
+    'the working frontend must stay online until the replacement backend is healthy',
+  );
+  assert.match(
+    launcher.slice(backendHealthWait, frontendStart),
+    /Stop-PortProcesses -Port \$FrontendPort/,
+    'the old frontend should be replaced only after backend health is confirmed',
   );
 });
 

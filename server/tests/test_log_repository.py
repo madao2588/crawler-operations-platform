@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from app.models.log import LogEntry
@@ -75,3 +77,35 @@ async def test_list_paginated_only_summary(async_session) -> None:
     )
     assert total == 2
     assert len(items) == 2
+
+
+@pytest.mark.asyncio
+async def test_returns_latest_summary_and_error_for_current_run(async_session) -> None:
+    repo = LogRepository(async_session)
+    created_after = datetime.now(timezone.utc) - timedelta(minutes=1)
+    await repo.create(
+        level="INFO",
+        task_id=7,
+        message="[run=old] summary",
+        run_summary='{"kind":"run_summary","run_id":"old","mode":"single_page","metrics":{"failed":0}}',
+    )
+    await repo.create(
+        level="ERROR",
+        task_id=7,
+        message="[run=current] detail failed",
+        error_stack="httpx.ReadTimeout: timed out",
+    )
+    await repo.create(
+        level="INFO",
+        task_id=7,
+        message="[run=current] summary",
+        run_summary='{"kind":"run_summary","run_id":"current","mode":"list_follow","metrics":{"failed":1}}',
+    )
+
+    summary = await repo.get_latest_run_summary(task_id=7, created_after=created_after)
+    error = await repo.get_latest_error(task_id=7, run_id="current", created_after=created_after)
+
+    assert summary is not None
+    assert '"run_id":"current"' in (summary.run_summary or "")
+    assert error is not None
+    assert error.message == "[run=current] detail failed"

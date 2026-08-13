@@ -5,6 +5,7 @@ from app.core.database import get_db_session
 from app.repositories.auth_repo import AuthRepository
 from app.repositories.data_repo import DataRepository
 from app.repositories.log_repo import LogRepository
+from app.repositories.focus_repo import NoticeFocusRepository
 from app.repositories.keyword_rule_repo import KeywordRepository
 from app.repositories.task_repo import TaskRepository
 from app.repositories.template_repo import TemplateRepository
@@ -13,9 +14,13 @@ from app.services.auth_service import AuthService
 from app.services.crawl_service import CrawlService
 from app.services.dashboard_service import DashboardService
 from app.services.data_service import DataService
+from app.services.login_guard_service import LoginGuardService
 from app.services.notice_service import NoticeService
 from app.services.task_service import TaskService
 from app.services.template_service import TemplateService
+
+
+_login_guard_service = LoginGuardService()
 
 
 def get_task_repository(session: AsyncSession = Depends(get_db_session)) -> TaskRepository:
@@ -32,6 +37,12 @@ def get_data_repository(session: AsyncSession = Depends(get_db_session)) -> Data
 
 def get_log_repository(session: AsyncSession = Depends(get_db_session)) -> LogRepository:
     return LogRepository(session)
+
+
+def get_notice_focus_repository(
+    session: AsyncSession = Depends(get_db_session),
+) -> NoticeFocusRepository:
+    return NoticeFocusRepository(session)
 
 
 def get_keyword_rule_repository(session: AsyncSession = Depends(get_db_session)) -> KeywordRepository:
@@ -76,8 +87,9 @@ def get_data_service(
 def get_notice_service(
     data_repo: DataRepository = Depends(get_data_repository),
     keyword_repo: KeywordRepository = Depends(get_keyword_rule_repository),
+    focus_repo: NoticeFocusRepository = Depends(get_notice_focus_repository),
 ) -> NoticeService:
-    return NoticeService(data_repo=data_repo, keyword_repo=keyword_repo)
+    return NoticeService(data_repo=data_repo, keyword_repo=keyword_repo, focus_repo=focus_repo)
 
 
 def get_dashboard_service(
@@ -101,7 +113,7 @@ def get_template_service(
 def get_auth_service(
     auth_repo: AuthRepository = Depends(get_auth_repository),
 ) -> AuthService:
-    return AuthService(auth_repo=auth_repo)
+    return AuthService(auth_repo=auth_repo, login_guard=_login_guard_service)
 
 
 def get_bearer_token(authorization: str | None = Header(default=None)) -> str:

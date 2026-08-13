@@ -3,6 +3,7 @@ from pathlib import Path
 
 from app.repositories.data_repo import DataRepository
 from app.repositories.keyword_rule_repo import KeywordRepository
+from app.repositories.focus_repo import NoticeFocusRepository
 from app.schemas.common import PageData
 from app.schemas.notice import (
     NoticeListItem,
@@ -24,9 +25,15 @@ from app.utils.notice import (
 
 
 class NoticeService:
-    def __init__(self, data_repo: DataRepository, keyword_repo: KeywordRepository):
+    def __init__(
+        self,
+        data_repo: DataRepository,
+        keyword_repo: KeywordRepository,
+        focus_repo: NoticeFocusRepository | None = None,
+    ):
         self.data_repo = data_repo
         self.keyword_repo = keyword_repo
+        self.focus_repo = focus_repo
         self.server_dir = Path(__file__).resolve().parents[2]
 
     async def _get_keyword_lists(self) -> tuple[list[str], list[str]]:
@@ -47,14 +54,19 @@ class NoticeService:
         review_status: str | None = None,
         archived: bool | None = None,
         captured_today: bool | None = None,
+        business_today: bool | None = None,
+        business_week: bool | None = None,
         month: str | None = None,
         source_site: str | None = None,
         keyword_hit: bool | None = None,
         high_priority: bool | None = None,
         high_quality: bool | None = None,
         project_signal: str | None = None,
+        focused_only: bool | None = None,
+        user_id: int | None = None,
     ) -> PageData[NoticeListItem]:
         active_kws, high_pri_kws = await self._get_keyword_lists()
+        focused_ids = await self._focused_ids(user_id)
         items, total = await self.data_repo.list_paginated(
             page=page,
             page_size=page_size,
@@ -63,19 +75,25 @@ class NoticeService:
             review_status=review_status,
             archived=archived,
             captured_today=captured_today,
+            business_today=business_today,
+            business_week=business_week,
             month=month,
             source_site=source_site,
             keyword_hit=keyword_hit,
             high_priority=high_priority,
             high_quality=high_quality,
             project_signal=project_signal,
+            data_ids=focused_ids if focused_only else None,
             enabled_only=True,
             include_disabled_history=True,
             active_keywords_for_sort=active_kws or None,
             active_keywords_for_filter=active_kws,
             high_priority_keywords=high_pri_kws,
         )
-        notices = [self._to_notice_list_item(item, active_kws, high_pri_kws) for item in items]
+        notices = [
+            self._to_notice_list_item(item, active_kws, high_pri_kws, focused_ids)
+            for item in items
+        ]
         return PageData[NoticeListItem](
             items=notices,
             total=total,
@@ -91,24 +109,32 @@ class NoticeService:
         review_status: str | None = None,
         archived: bool | None = None,
         captured_today: bool | None = None,
+        business_today: bool | None = None,
+        business_week: bool | None = None,
         source_site: str | None = None,
         keyword_hit: bool | None = None,
         high_priority: bool | None = None,
         high_quality: bool | None = None,
         project_signal: str | None = None,
+        focused_only: bool | None = None,
+        user_id: int | None = None,
     ) -> list[NoticeMonthOption]:
         active_kws, high_pri_kws = await self._get_keyword_lists()
+        focused_ids = await self._focused_ids(user_id)
         rows = await self.data_repo.aggregate_notice_months(
             keyword=keyword,
             category=category,
             review_status=review_status,
             archived=archived,
             captured_today=captured_today,
+            business_today=business_today,
+            business_week=business_week,
             source_site=source_site,
             keyword_hit=keyword_hit,
             high_priority=high_priority,
             high_quality=high_quality,
             project_signal=project_signal,
+            data_ids=focused_ids if focused_only else None,
             enabled_only=True,
             include_disabled_history=True,
             active_keywords_for_filter=active_kws,
@@ -121,6 +147,12 @@ class NoticeService:
             enabled_only=True,
             include_disabled_history=True,
         )
+        return self.build_source_site_options(rows)
+
+    @staticmethod
+    def build_source_site_options(
+        rows: list[tuple[str, str, int]],
+    ) -> list[NoticeSourceSiteOption]:
         grouped: dict[str, dict[str, int | str]] = {}
         for source_site, task_name, notice_count in rows:
             if not source_site:
@@ -152,7 +184,7 @@ class NoticeService:
             for source_site, values in ranked
         ]
 
-    async def get_notice(self, notice_id: int) -> NoticeRead:
+    async def get_notice(self, notice_id: int, *, user_id: int | None = None) -> NoticeRead:
         data = await self.data_repo.get_by_id(notice_id)
         if data is None:
             raise LookupError(f"Notice {notice_id} not found")
@@ -183,6 +215,7 @@ class NoticeService:
             ai_summary=data.ai_summary,
             review_status=data.review_status,
             is_archived=data.is_archived,
+            is_focused=data.id in await self._focused_ids(user_id),
             remark=data.remark,
             task_id=data.task_id,
             content_text=data.content_text or "",
@@ -212,7 +245,11 @@ class NoticeService:
         )
 
     def _to_notice_list_item(
-        self, item, active_keywords: list[str], high_priority_keywords: list[str]
+        self,
+        item,
+        active_keywords: list[str],
+        high_priority_keywords: list[str],
+        focused_ids: set[int] | None = None,
     ) -> NoticeListItem:
         matched_keywords = extract_matched_keywords([item.title, item.content_text], active_keywords)
         metadata = _load_metadata(item.metadata_json)
@@ -239,9 +276,26 @@ class NoticeService:
             ai_summary=item.ai_summary,
             review_status=item.review_status,
             is_archived=item.is_archived,
+            is_focused=item.id in (focused_ids or set()),
             remark=item.remark,
             task_id=item.task_id,
         )
+
+    async def set_focus(self, notice_id: int, *, user_id: int, focused: bool) -> NoticeRead:
+        if self.focus_repo is None:
+            raise RuntimeError("Personal focus repository is not configured")
+        if await self.data_repo.get_by_id(notice_id) is None:
+            raise LookupError(f"Notice {notice_id} not found")
+        if focused:
+            await self.focus_repo.add(user_id, notice_id)
+        else:
+            await self.focus_repo.remove(user_id, notice_id)
+        return await self.get_notice(notice_id, user_id=user_id)
+
+    async def _focused_ids(self, user_id: int | None) -> set[int]:
+        if user_id is None or self.focus_repo is None:
+            return set()
+        return await self.focus_repo.list_data_ids(user_id)
 
 
 def _load_metadata(raw_value: str | None) -> dict[str, object] | None:

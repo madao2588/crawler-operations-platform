@@ -149,6 +149,23 @@ class TaskRepository:
         result = await self.session.execute(statement)
         return result.scalars().all()
 
+    async def list_stale_enabled(self, *, stale_before: datetime) -> Sequence[Task]:
+        run_status = func.coalesce(Task.last_run_status, "")
+        statement = (
+            select(Task)
+            .where(
+                Task.status == int(TaskStatus.ENABLED),
+                or_(
+                    Task.last_success_at.is_(None),
+                    Task.last_success_at < stale_before,
+                ),
+                run_status.notin_(("queued", "running")),
+            )
+            .order_by(Task.id.asc())
+        )
+        result = await self.session.execute(statement)
+        return result.scalars().all()
+
     async def update(self, task: Task, payload: TaskUpdate) -> Task:
         for field, value in payload.model_dump(exclude_unset=True).items():
             setattr(task, field, value)

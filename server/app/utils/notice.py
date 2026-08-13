@@ -99,6 +99,14 @@ PROJECT_RESULT_SIGNAL_KEYWORD_GROUPS = (
     ("项目", "名单", "公示"),
 )
 
+PROJECT_RESULT_IRRELEVANCE_KEYWORDS = (
+    "作品征集",
+    "获奖名单",
+    "更名高新技术企业",
+    "异地搬迁高新技术企业",
+    "创新药品医疗器械目录",
+)
+
 PROJECT_NOTICE_RELEVANCE_CONTEXT_KEYWORDS = (
     "项目",
     "申报",
@@ -163,6 +171,7 @@ PROJECT_NOTICE_IRRELEVANCE_KEYWORDS = (
     "招标公告",
     "中标公告",
     "工程建设",
+    "指南意见",
 )
 
 PROJECT_NOTICE_CATEGORIES = ("项目申报",)
@@ -209,7 +218,9 @@ CATEGORY_KEYWORDS: dict[str, tuple[str, ...]] = {
     ),
 }
 
-REVIEW_STATUSES = ("待关注", "有效", "无效")
+# Keep legacy values readable while accepting every status exposed by the
+# current review UI.  Existing rows may still contain "有效"/"无效".
+REVIEW_STATUSES = ("待关注", "重点关注", "已跟进", "已忽略", "有效", "无效")
 
 
 def effective_active_keywords(active_from_rules: list[str]) -> list[str]:
@@ -317,6 +328,8 @@ def project_notice_kind(
         return "其他项目线索"
     title = (parts[0] or "").lower() if parts else ""
     supporting_text = " ".join(part for part in parts[1:] if part).lower()
+    if _has_project_result_irrelevance(title):
+        return "其他项目线索"
     if _has_project_result_signal(title):
         return "结果公示"
     if _has_project_declaration_signal(title):
@@ -335,12 +348,18 @@ def _has_project_declaration_signal(text: str) -> bool:
 
 
 def _has_project_result_signal(text: str) -> bool:
+    if _has_project_result_irrelevance(text):
+        return False
     if any(keyword.lower() in text for keyword in PROJECT_RESULT_SIGNAL_KEYWORDS):
         return True
     return any(
         all(keyword.lower() in text for keyword in keyword_group)
         for keyword_group in PROJECT_RESULT_SIGNAL_KEYWORD_GROUPS
     )
+
+
+def _has_project_result_irrelevance(text: str) -> bool:
+    return any(keyword.lower() in text for keyword in PROJECT_RESULT_IRRELEVANCE_KEYWORDS)
 
 
 def _has_project_process_signal(text: str) -> bool:

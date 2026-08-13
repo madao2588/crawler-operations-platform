@@ -10,10 +10,13 @@ export interface NoticeQuery {
   reviewStatus?: string
   archived?: boolean
   capturedToday?: boolean
+  businessToday?: boolean
+  businessWeek?: boolean
   sourceSite?: string
   keywordHit?: boolean
   highPriority?: boolean
   highQuality?: boolean
+  focusedOnly?: boolean
   projectSignal?: string
   noticeId?: number
 }
@@ -38,10 +41,13 @@ export function buildNoticeUrl(query: NoticeQuery = {}) {
   setString(params, 'review_status', query.reviewStatus)
   setBoolean(params, 'archived', query.archived)
   setBoolean(params, 'captured_today', query.capturedToday)
+  setBoolean(params, 'business_today', query.businessToday)
+  setBoolean(params, 'business_week', query.businessWeek)
   setString(params, 'source_site', query.sourceSite)
   setBoolean(params, 'keyword_hit', query.keywordHit)
   setBoolean(params, 'high_priority', query.highPriority)
   setBoolean(params, 'high_quality', query.highQuality)
+  setBoolean(params, 'focused_only', query.focusedOnly)
   setString(params, 'project_signal', query.projectSignal)
   if (query.noticeId !== undefined) params.set('notice_id', String(query.noticeId))
   const search = params.toString()
@@ -57,10 +63,13 @@ export function readNoticeQuery(search: string): NoticeQuery {
   assignString(result, 'reviewStatus', params.get('review_status'))
   assignBoolean(result, 'archived', params.get('archived'))
   assignBoolean(result, 'capturedToday', params.get('captured_today'))
+  assignBoolean(result, 'businessToday', params.get('business_today'))
+  assignBoolean(result, 'businessWeek', params.get('business_week'))
   assignString(result, 'sourceSite', params.get('source_site'))
   assignBoolean(result, 'keywordHit', params.get('keyword_hit'))
   assignBoolean(result, 'highPriority', params.get('high_priority'))
   assignBoolean(result, 'highQuality', params.get('high_quality'))
+  assignBoolean(result, 'focusedOnly', params.get('focused_only'))
   assignString(result, 'projectSignal', params.get('project_signal'))
   const noticeId = Number(params.get('notice_id'))
   if (Number.isInteger(noticeId) && noticeId > 0) result.noticeId = noticeId

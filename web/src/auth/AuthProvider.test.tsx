@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { StrictMode } from 'react'
 import { ApiClient } from '../api/client'
 import { AuthProvider, useAuth } from './AuthProvider'
 import { saveSession } from './session'
@@ -47,19 +48,52 @@ describe('AuthProvider', () => {
     )
 
     render(
-      <AuthProvider clientFactory={(getToken, onUnauthorized) => new ApiClient({ fetcher, getToken, onUnauthorized })}>
-        <Probe />
-      </AuthProvider>,
+      <StrictMode>
+        <AuthProvider clientFactory={(getToken, onUnauthorized) => new ApiClient({ fetcher, getToken, onUnauthorized })}>
+          <Probe />
+        </AuthProvider>
+      </StrictMode>,
     )
 
     expect(screen.getByText('loading')).toBeInTheDocument()
     await waitFor(() => expect(screen.getByText('运营管理员')).toBeInTheDocument())
     expect(fetcher).toHaveBeenCalledWith(
-      '/v1/auth/me',
+      '/v1/auth/me?include_avatar=false',
       expect.objectContaining({
         headers: expect.objectContaining({ Authorization: 'Bearer stored-token' }),
       }),
     )
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the locally stored avatar when lean session validation omits it', async () => {
+    saveSession({
+      accessToken: 'stored-token',
+      expiresAt: '2026-08-04T00:00:00Z',
+      user: { id: 1, username: 'admin', avatarBase64: 'persisted-avatar', role: 'admin', isActive: true },
+    })
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          code: 0,
+          message: 'success',
+          data: {
+            access_token: 'stored-token',
+            expires_at: '2026-08-04T00:00:00Z',
+            user: { id: 1, username: 'admin', avatar_base64: null, role: 'admin', is_active: true },
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    )
+
+    render(
+      <AuthProvider clientFactory={(getToken, onUnauthorized) => new ApiClient({ fetcher, getToken, onUnauthorized })}>
+        <AvatarProbe />
+      </AuthProvider>,
+    )
+
+    await waitFor(() => expect(screen.getByText('persisted-avatar')).toBeInTheDocument())
   })
 
   it('clears an invalid stored session and exposes the login state', async () => {

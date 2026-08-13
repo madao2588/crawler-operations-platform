@@ -3,6 +3,7 @@ from app.utils.notice import (
     effective_high_priority_keywords,
     is_high_priority_notice,
     is_high_quality_notice,
+    normalize_review_status,
     project_notice_has_project_context,
     project_notice_kind,
 )
@@ -15,6 +16,11 @@ def test_effective_active_keywords_use_enabled_database_rules_only() -> None:
 
 def test_effective_active_keywords_empty_rules_stay_empty() -> None:
     assert effective_active_keywords([]) == []
+
+
+def test_review_status_accepts_frontend_workflow_and_focus_states() -> None:
+    for status in ("待关注", "重点关注", "已跟进", "已忽略"):
+        assert normalize_review_status(status) == status
 
 
 def test_business_priority_and_content_quality_are_independent() -> None:
@@ -94,6 +100,27 @@ def test_project_notice_kind_prefers_title_and_understands_official_result_phras
     )
     assert project_notice_kind(["关于生物医药产业临床试验视同立项项目公示"]) == "结果公示"
     assert project_notice_kind(["关于科技型企业拟登记名单的公示"]) == "结果公示"
+    assert (
+        project_notice_kind(
+            ["广东省2026年第五批拟更名高新技术企业名单公示"],
+            category="项目申报",
+        )
+        == "其他项目线索"
+    )
+    assert (
+        project_notice_kind(
+            ["广东省异地搬迁高新技术企业名单公示"],
+            category="项目申报",
+        )
+        == "其他项目线索"
+    )
+    assert (
+        project_notice_kind(
+            ["创新药品医疗器械目录公示"],
+            category="项目申报",
+        )
+        == "其他项目线索"
+    )
     assert (
         project_notice_kind(
             [
