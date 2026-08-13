@@ -143,3 +143,16 @@ def test_release_version_sync_preserves_active_configuration(tmp_path: Path) -> 
     assert "CRAWLER_OUTBOUND_PROXY_URL=http://proxy.internal:8080" in content
     assert "RELEASE_VERSION=new-release" in content
     assert "RELEASE_VERSION=old-release" not in content
+
+
+def test_deploy_script_passes_detached_mode_as_a_literal_compose_argument() -> None:
+    deploy = (
+        Path(__file__).resolve().parents[2]
+        / "deployment"
+        / "intranet"
+        / "deploy.ps1"
+    ).read_text(encoding="utf-8")
+
+    assert 'Invoke-Compose -Arguments @("up", "-d", "--no-build"' in deploy
+    assert 'Invoke-Compose -Arguments @("up", "-d", "--remove-orphans")' in deploy
+    assert "Invoke-Compose up -d" not in deploy

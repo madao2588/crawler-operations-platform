@@ -2,7 +2,7 @@
 
 Assert-DeploymentFiles
 Assert-DockerReady
-Invoke-Compose ps
+Invoke-Compose -Arguments @("ps")
 
 $healthUrl = Get-HealthUrl
 try {
