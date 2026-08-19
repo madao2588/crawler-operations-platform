@@ -11,6 +11,7 @@ def test_production_compose_never_builds_images_on_the_target_server() -> None:
     assert "dockerfile:" not in compose
     assert "new-drug-intelligence-api:${RELEASE_VERSION:-latest}" in compose
     assert "new-drug-intelligence-web:${RELEASE_VERSION:-latest}" in compose
+    assert compose.count("pull_policy: never") == 2
 
 
 def test_release_deploy_requires_packaged_images_and_disables_builds() -> None:
@@ -20,7 +21,10 @@ def test_release_deploy_requires_packaged_images_and_disables_builds() -> None:
 
     assert "[switch]$ForceBuild" not in deploy
     assert 'Invoke-Compose -Arguments @("build"' not in deploy
-    assert 'Invoke-Compose -Arguments @("up", "-d", "--no-build"' in deploy
+    assert (
+        'Invoke-Compose -Arguments @("up", "-d", "--pull", "never", "--no-build"'
+        in deploy
+    )
     assert "production-images.tar" in deploy
     assert "Packaged production images are missing" in deploy
 

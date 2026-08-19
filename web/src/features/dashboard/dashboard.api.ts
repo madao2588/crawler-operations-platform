@@ -83,6 +83,7 @@ function mapRuntime(raw: unknown): DashboardRuntime {
     database: asString(record.database, 'unknown'),
     scheduler: asString(record.scheduler, 'unknown'),
     scheduledJobs: asNumber(record.scheduled_jobs),
+    releaseVersion: asString(record.release_version, 'dev'),
   }
 }
 

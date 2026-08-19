@@ -40,6 +40,19 @@ async def run_startup_maintenance() -> None:
     await maintenance.run_startup_maintenance()
 
 
+async def run_due_collection_retries() -> None:
+    async with AsyncSessionLocal() as session:
+        task_repo = TaskRepository(session)
+        log_repo = LogRepository(session)
+        crawl_service = CrawlService(task_repo=task_repo, log_repo=log_repo)
+        task_service = TaskService(
+            task_repo=task_repo,
+            log_repo=log_repo,
+            crawl_service=crawl_service,
+        )
+        await task_service.retry_due_failed_tasks()
+
+
 def schedule_daily_maintenance(scheduler) -> None:  # noqa: ANN001
     if not settings.maintenance_enabled:
         return
@@ -54,6 +67,21 @@ def schedule_daily_maintenance(scheduler) -> None:  # noqa: ANN001
         coalesce=True,
         max_instances=1,
         misfire_grace_time=3600,
+    )
+
+
+def schedule_collection_retries(scheduler) -> None:  # noqa: ANN001
+    retry_minutes = max(1, int(settings.automatic_retry_minutes))
+    scheduler.add_job(
+        run_due_collection_retries,
+        "interval",
+        minutes=retry_minutes,
+        timezone="Asia/Shanghai",
+        id="collection-retry-sweep",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=retry_minutes * 60,
     )
 
 
@@ -104,6 +132,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     if not scheduler.running:
         scheduler.start()
     schedule_daily_maintenance(scheduler)
+    schedule_collection_retries(scheduler)
     await bootstrap_auth()
     await bootstrap_keywords()
     await bootstrap_templates()

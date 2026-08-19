@@ -617,7 +617,7 @@ async def test_captured_today_uses_shanghai_midnight_as_utc_half_open_range(
 
 
 @pytest.mark.asyncio
-async def test_business_today_prefers_published_date_and_falls_back_to_capture_date(
+async def test_business_today_uses_only_the_website_publication_date(
     async_session,
     monkeypatch,
 ) -> None:
@@ -702,20 +702,18 @@ async def test_business_today_prefers_published_date_and_falls_back_to_capture_d
         business_today=False,
     )
 
-    assert today_total == 2
-    assert {item.title for item in today} == {
-        "今日发布但早先采集",
-        "缺少发布日期且今日采集",
-    }
-    assert outside_total == 2
+    assert today_total == 1
+    assert {item.title for item in today} == {"今日发布但早先采集"}
+    assert outside_total == 3
     assert {item.title for item in outside} == {
         "历史发布但今日补采",
+        "缺少发布日期且今日采集",
         "缺少发布日期且历史采集",
     }
 
 
 @pytest.mark.asyncio
-async def test_business_week_prefers_published_date_and_falls_back_to_capture_date(
+async def test_business_week_uses_only_the_website_publication_date(
     async_session,
     monkeypatch,
 ) -> None:
@@ -800,14 +798,12 @@ async def test_business_week_prefers_published_date_and_falls_back_to_capture_da
         business_week=False,
     )
 
-    assert this_week_total == 2
-    assert {item.title for item in this_week} == {
-        "本周发布但早先采集",
-        "缺少发布日期且本周采集",
-    }
-    assert outside_total == 2
+    assert this_week_total == 1
+    assert {item.title for item in this_week} == {"本周发布但早先采集"}
+    assert outside_total == 3
     assert {item.title for item in outside} == {
         "上周发布但本周补采",
+        "缺少发布日期且本周采集",
         "本周范围结束后的公告",
     }
 

@@ -351,23 +351,23 @@
 }
 
 .system-page .task-table th:first-child {
-  width: 32%;
+  width: 36%;
 }
 
 .system-page .task-table th:nth-child(2) {
-  width: 108px;
+  width: 180px;
 }
 
 .system-page .task-table th:nth-child(3) {
-  width: 90px;
+  width: 110px;
 }
 
 .system-page .task-table th:nth-child(4) {
-  width: 112px;
+  width: 140px;
 }
 
 .system-page .task-table th:last-child {
-  width: 156px;
+  width: auto;
 }
 
 .system-page .task-table td:nth-child(2),
@@ -458,6 +458,28 @@
   justify-content: flex-start;
   width: 100%;
   white-space: nowrap;
+}
+
+.system-page .detail-maintenance {
+  margin: 0 18px 18px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: #f8fbff;
+}
+
+.system-page .detail-maintenance summary {
+  min-height: 32px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.system-page .detail-maintenance p {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .system-page .status-badge {

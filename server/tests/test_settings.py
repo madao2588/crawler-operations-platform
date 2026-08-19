@@ -28,7 +28,7 @@ def test_bootstrap_admin_defaults_are_unset(monkeypatch: pytest.MonkeyPatch) -> 
     assert settings.bootstrap_admin_password is None
 
 
-def test_requirement_one_government_hosts_bypass_system_proxy_by_default(
+def test_remote_collection_hosts_can_use_an_available_proxy_by_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("CRAWLER_OUTBOUND_NO_PROXY", raising=False)
@@ -39,7 +39,8 @@ def test_requirement_one_government_hosts_bypass_system_proxy_by_default(
         if item.strip()
     }
 
-    assert {
+    assert configured == {"localhost", "127.0.0.1", "::1"}
+    assert not {
         "service.most.gov.cn",
         "gdstc.gd.gov.cn",
         "kjj.gz.gov.cn",
@@ -47,7 +48,7 @@ def test_requirement_one_government_hosts_bypass_system_proxy_by_default(
         "www.hengqin.gov.cn",
         "kjt.hunan.gov.cn",
         "kjj.changsha.gov.cn",
-    } <= configured
+    } & configured
 
 
 @pytest.mark.asyncio

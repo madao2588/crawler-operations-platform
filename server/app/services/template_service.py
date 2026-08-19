@@ -84,8 +84,6 @@ PROJECT_DECLARATION_SOURCE_TEMPLATE_IDS = frozenset(
         "hengqin_announcements",
         "hunan_stc_notices",
         "changsha_sti_notices",
-        "wechat_k_innovation",
-        "wechat_hengqin_biomed",
     }
 )
 
@@ -278,46 +276,6 @@ CHANGSHA_PROJECT_DECLARATION_PARSER_RULES = _project_parser_rules(
     content="css:.xly_contens, .trs_editor_view",
 )
 
-WECHAT_MANUAL_PARSER_RULES = json.dumps(
-    {
-        "collection_mode": "manual",
-        "allowed_hosts": ["mp.weixin.qq.com"],
-        "force_dynamic_fetch": True,
-        "request_timeout_sec": 60,
-        "title": "css:#activity-name, h1.rich_media_title",
-        "published_at": "css:#publish_time",
-        "content": "css:#js_content",
-    },
-    ensure_ascii=False,
-)
-
-COMPETITOR_WECHAT_MANUAL_PARSER_RULES = json.dumps(
-    {
-        **json.loads(WECHAT_MANUAL_PARSER_RULES),
-        "category": "竞品信息",
-        "metadata": {
-            "kind": "competitor_intelligence",
-            "source": "WeChat",
-            "topic": "人工公众号线索",
-            "evidence_level": "公众号线索（待核验）",
-        },
-    },
-    ensure_ascii=False,
-)
-
-INDUSTRY_MEETING_WECHAT_MANUAL_PARSER_RULES = json.dumps(
-    {
-        **json.loads(WECHAT_MANUAL_PARSER_RULES),
-        "category": "行业会议",
-        "metadata": {
-            "kind": "industry_meeting",
-            "source": "公众号/同行分享",
-            "review_status": "待核验",
-        },
-    },
-    ensure_ascii=False,
-)
-
 PUBMED_COMPETITOR_PARSER_RULES = json.dumps(
     {
         "crawl_mode": "pubmed",
@@ -373,7 +331,6 @@ MEETING_SOURCE_TEMPLATE_IDS = frozenset(
         "cpa_association",
         "bioon_meetings",
         "cphi_china_events",
-        "wechat_industry_meetings",
     }
 )
 
@@ -564,61 +521,6 @@ NEW_DRUG_SOURCE_TEMPLATES = [
         "last_used_at": None,
     },
     {
-        "id": "wechat_k_innovation",
-        "label": "K创联盟公众号线索",
-        "name": "K创联盟公众号线索登记",
-        "start_url": "https://mp.weixin.qq.com/",
-        "cron_expr": "0 9 * * *",
-        "parser_rules": WECHAT_MANUAL_PARSER_RULES,
-        "enabled": False,
-        "description": "来自《新药部AI需求》：公众号来源，需人工登记文章链接或后续接入授权采集。",
-        "tags": ["申报通知", "结果公示", "公众号", "线索"],
-        "usage_count": 0,
-        "last_used_at": None,
-    },
-    {
-        "id": "wechat_hengqin_biomed",
-        "label": "横琴大健康生物医药产业协会公众号线索",
-        "name": "横琴大健康生物医药产业协会公众号线索登记",
-        "start_url": "https://mp.weixin.qq.com/",
-        "cron_expr": "0 9 * * *",
-        "parser_rules": WECHAT_MANUAL_PARSER_RULES,
-        "enabled": False,
-        "description": "来自《新药部AI需求》：公众号来源，需人工登记文章链接或后续接入授权采集。",
-        "tags": ["申报通知", "结果公示", "公众号", "横琴", "线索"],
-        "usage_count": 0,
-        "last_used_at": None,
-    },
-    {
-        "id": "wechat_competitor_intelligence",
-        "label": "竞品研发公众号线索",
-        "name": "竞品研发公众号线索登记",
-        "start_url": "https://mp.weixin.qq.com/",
-        "cron_expr": "0 10 * * *",
-        "parser_rules": COMPETITOR_WECHAT_MANUAL_PARSER_RULES,
-        "enabled": False,
-        "description": "需求3公众号来源：人工登记脑胶质瘤、降尿酸药物研发相关文章链接，不绕过平台限制。",
-        "tags": ["竞品信息", "公众号", "脑胶质瘤", "降尿酸药物", "线索"],
-        "usage_count": 0,
-        "last_used_at": None,
-    },
-    {
-        "id": "wechat_industry_meetings",
-        "label": "行业会议公众号/同行线索",
-        "name": "行业会议公众号与同行分享登记",
-        "start_url": "https://mp.weixin.qq.com/",
-        "cron_expr": "0 9 * * *",
-        "parser_rules": INDUSTRY_MEETING_WECHAT_MANUAL_PARSER_RULES,
-        "enabled": False,
-        "description": (
-            "需求2人工来源：登记公众号或同行分享的行业会议文章链接，"
-            "保留原始证据并在核验后进入会议列表。"
-        ),
-        "tags": ["行业会议", "公众号", "同行分享", "人工核验"],
-        "usage_count": 0,
-        "last_used_at": None,
-    },
-    {
         "id": "dxy_pharmacy_meetings",
         "label": "丁香会议药学会议",
         "name": "丁香会议药学会议采集",
@@ -720,7 +622,8 @@ NEW_DRUG_SOURCE_TEMPLATES = [
     },
 ]
 
-DEFAULT_TEMPLATES = [*DEFAULT_TEMPLATES, *NEW_DRUG_SOURCE_TEMPLATES]
+DEMO_TEMPLATE_IDS = frozenset({"news_article", "tender_notice", "portal_announcement"})
+DEFAULT_TEMPLATES = [*NEW_DRUG_SOURCE_TEMPLATES]
 
 
 class TemplateService:
@@ -739,6 +642,12 @@ class TemplateService:
         *,
         sync_required_sources: bool = False,
     ) -> None:
+        if self._using_default_template_file:
+            for template_id in DEMO_TEMPLATE_IDS:
+                demo_template = await self.template_repo.get_by_id(template_id)
+                if demo_template is not None:
+                    await self.template_repo.delete(demo_template)
+
         seed_templates = self._load_seed_templates()
         missing_templates: list[TaskTemplateRead] = []
         required_source_ids = {str(item["id"]) for item in NEW_DRUG_SOURCE_TEMPLATES}
@@ -809,6 +718,11 @@ class TemplateService:
                 raise ValueError("Template storage must contain a list")
             seed_items = loaded
             if self._using_default_template_file:
+                loaded = [
+                    item
+                    for item in loaded
+                    if not isinstance(item, dict) or str(item.get("id")) not in DEMO_TEMPLATE_IDS
+                ]
                 loaded_ids = {str(item.get("id")) for item in loaded if isinstance(item, dict)}
                 seed_items = [
                     *loaded,

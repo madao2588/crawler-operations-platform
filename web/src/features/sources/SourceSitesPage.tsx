@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent, MouseEvent, ReactNode } from 'react'
-import { ChevronDown, ChevronUp, Plus, RefreshCw, Search } from 'lucide-react'
+import { ChevronDown, ChevronUp, RefreshCw, Search } from 'lucide-react'
 import { ApiError } from '../../api/client'
 import { useAuth } from '../../auth/AuthProvider'
 import { DataTableShell, DetailDrawer, PageToolbar } from '../../components/UiPrimitives'
 import './SourceSitesPage.css'
 
-type TemplateFilter = 'all' | 'manual' | 'automatic' | 'needsAuth'
+type TemplateFilter = 'all' | 'automatic' | 'needsAuth'
 
 interface TemplateDto {
   id: string
@@ -101,13 +101,6 @@ interface TestTemplateResponse {
   } | null
 }
 
-interface ManualCollectionResponse {
-  source_id: string
-  source_url: string
-  status: string
-  notice_id: number
-}
-
 interface TaskRunResponse {
   task_id: number
   status: string
@@ -135,14 +128,12 @@ interface FeedbackState {
 }
 
 interface SourceSitesPageProps {
-  onUseTemplate?: (templateId: string) => void
   canManage?: boolean
 }
 
-const manualTemplateIds = new Set(['wechat_k_innovation', 'wechat_hengqin_biomed', 'wechat_competitor_intelligence'])
 const authorizationTemplateIds = new Set(['pharnexcloud_drug_database'])
 
-export function SourceSitesPage({ onUseTemplate, canManage: canManageProp }: SourceSitesPageProps) {
+export function SourceSitesPage({ canManage: canManageProp }: SourceSitesPageProps) {
   const { client, session } = useAuth()
   const canManage = canManageProp ?? session?.user.role !== 'user'
   const [templates, setTemplates] = useState<TemplateModel[]>([])
@@ -157,10 +148,8 @@ export function SourceSitesPage({ onUseTemplate, canManage: canManageProp }: Sou
   const [search, setSearch] = useState('')
   const [detailTemplate, setDetailTemplate] = useState<TemplateModel | null>(null)
   const [editorTemplate, setEditorTemplate] = useState<TemplateModel | null>(null)
-  const [creating, setCreating] = useState(false)
   const [saving, setSaving] = useState(false)
   const [deleteTemplate, setDeleteTemplate] = useState<TemplateModel | null>(null)
-  const [collectTemplate, setCollectTemplate] = useState<TemplateModel | null>(null)
   const [pendingIds, setPendingIds] = useState<string[]>([])
   const [runningTaskIds, setRunningTaskIds] = useState<number[]>([])
 
@@ -179,7 +168,6 @@ export function SourceSitesPage({ onUseTemplate, canManage: canManageProp }: Sou
     const kinds = templates.map((template) => resolveCollectionKind(template))
     return {
       total: templates.length,
-      manual: kinds.filter((kind) => kind === 'manual').length,
       automatic: kinds.filter((kind) => kind === 'automatic').length,
       needsAuth: kinds.filter((kind) => kind === 'needsAuth').length,
     }
@@ -235,22 +223,6 @@ export function SourceSitesPage({ onUseTemplate, canManage: canManageProp }: Sou
     }
   }
 
-  async function handleUseTemplate(template: TemplateModel) {
-    if (!canManage || pendingIds.includes(template.id)) return
-    markPending(template.id, true)
-    try {
-      await client.post<TemplateDto>(`/v1/templates/tasks/${template.id}/use`)
-      const nextTemplates = await loadTemplates()
-      setTemplates(nextTemplates)
-      setFeedback({ tone: 'success', message: `模板 ${template.label} 已登记使用` })
-      onUseTemplate?.(template.id)
-    } catch (requestError) {
-      setFeedback({ tone: 'error', message: getErrorMessage(requestError) })
-    } finally {
-      markPending(template.id, false)
-    }
-  }
-
   async function handleRetryTask(template: TemplateModel) {
     if (!canManage) return
     const task = healthByTemplateId[template.id]?.task
@@ -286,12 +258,12 @@ export function SourceSitesPage({ onUseTemplate, canManage: canManageProp }: Sou
     }
   }
 
-  async function handleSaveTemplate(value: TemplateEditorValue, template: TemplateModel | null) {
+  async function handleSaveTemplate(value: TemplateEditorValue, template: TemplateModel) {
     if (!canManage || saving) return
     setSaving(true)
     try {
       const payload = {
-        id: template?.id,
+        id: template.id,
         label: value.label.trim(),
         name: value.name.trim(),
         start_url: value.startUrl.trim(),
@@ -305,16 +277,10 @@ export function SourceSitesPage({ onUseTemplate, canManage: canManageProp }: Sou
           .filter(Boolean),
       }
 
-      if (template) {
-        await client.put<TemplateDto>(`/v1/templates/tasks/${template.id}`, payload)
-        setFeedback({ tone: 'success', message: '模板已更新' })
-      } else {
-        await client.post<TemplateDto>('/v1/templates/tasks', payload)
-        setFeedback({ tone: 'success', message: '模板已创建' })
-      }
+      await client.put<TemplateDto>(`/v1/templates/tasks/${template.id}`, payload)
+      setFeedback({ tone: 'success', message: '模板已更新' })
       const nextTemplates = await loadTemplates()
       setTemplates(nextTemplates)
-      setCreating(false)
       setEditorTemplate(null)
       await refreshHealth(nextTemplates)
     } catch (requestError) {
@@ -332,6 +298,13 @@ export function SourceSitesPage({ onUseTemplate, canManage: canManageProp }: Sou
     })
   }
 
+  const detailHealth = detailTemplate
+    ? healthByTemplateId[detailTemplate.id] ?? { task: null, latestLog: null }
+    : null
+  const detailRuntime = detailTemplate && detailHealth
+    ? resolveRuntimeStatus(detailTemplate, detailHealth)
+    : null
+
   return (
     <section className="source-page">
       <PageToolbar
@@ -342,12 +315,6 @@ export function SourceSitesPage({ onUseTemplate, canManage: canManageProp }: Sou
             <RefreshCw aria-hidden="true" />
             {healthLoading ? '刷新中...' : '刷新'}
           </button>
-          {canManage ? (
-            <button className="source-page__primaryButton" type="button" onClick={() => setCreating(true)}>
-              <Plus aria-hidden="true" />
-              新建模板
-            </button>
-          ) : null}
           </div>
         }
       />
@@ -361,7 +328,6 @@ export function SourceSitesPage({ onUseTemplate, canManage: canManageProp }: Sou
 
       <div className="source-page__stats">
         <StatCard title="全部模板" value={stats.total} active={templateFilter === 'all'} onClick={() => setTemplateFilter('all')} />
-        <StatCard title="人工登记" value={stats.manual} active={templateFilter === 'manual'} onClick={() => setTemplateFilter('manual')} />
         <StatCard title="自动采集" value={stats.automatic} active={templateFilter === 'automatic'} onClick={() => setTemplateFilter('automatic')} />
         <StatCard title="需授权" value={stats.needsAuth} active={templateFilter === 'needsAuth'} onClick={() => setTemplateFilter('needsAuth')} />
       </div>
@@ -430,15 +396,12 @@ export function SourceSitesPage({ onUseTemplate, canManage: canManageProp }: Sou
                   <th scope="col">采集方式</th>
                   <th scope="col">运行状态</th>
                   <th scope="col">最近使用</th>
-                  {canManage ? <th scope="col">操作</th> : null}
                 </tr>
               </thead>
               <tbody>
                 {visibleTemplates.map((template) => {
                   const health = healthByTemplateId[template.id] ?? { task: null, latestLog: null }
                   const runtime = resolveRuntimeStatus(template, health)
-                  const pending = pendingIds.includes(template.id)
-                  const retrying = health.task ? runningTaskIds.includes(health.task.id) : false
                   return (
                     <tr
                       key={template.id}
@@ -486,27 +449,6 @@ export function SourceSitesPage({ onUseTemplate, canManage: canManageProp }: Sou
                         <strong>{formatDateTime(template.lastUsedAt)}</strong>
                         <span className="source-page__cellMeta">累计 {template.usageCount} 次</span>
                       </td>
-                      {canManage ? <td>
-                        <div className="source-page__cardActions">
-                          <button className="source-page__primaryButton" type="button" aria-label={`使用模板 ${template.label}`} onClick={(event) => { event.stopPropagation(); void handleUseTemplate(template) }} disabled={pending}>
-                            {pending ? '处理中...' : '使用'}
-                          </button>
-                          <button className="source-page__secondaryButton" type="button" aria-label={`登记文章 ${template.label}`} onClick={(event) => { event.stopPropagation(); setCollectTemplate(template) }}>
-                            登记
-                          </button>
-                          <button className="source-page__secondaryButton" type="button" aria-label={`编辑模板 ${template.label}`} onClick={(event) => { event.stopPropagation(); setEditorTemplate(template) }}>
-                            编辑
-                          </button>
-                          <button className="source-page__secondaryButton source-page__secondaryButton--danger" type="button" aria-label={`删除模板 ${template.label}`} onClick={(event) => { event.stopPropagation(); setDeleteTemplate(template) }} disabled={pending}>
-                            删除
-                          </button>
-                          {runtime.canRetry && health.task ? (
-                            <button className="source-page__secondaryButton" type="button" aria-label={`重试任务 ${template.label}`} onClick={(event) => { event.stopPropagation(); void handleRetryTask(template) }} disabled={retrying}>
-                              {retrying ? '重试中...' : '重试'}
-                            </button>
-                          ) : null}
-                        </div>
-                      </td> : null}
                     </tr>
                   )
                 })}
@@ -516,7 +458,7 @@ export function SourceSitesPage({ onUseTemplate, canManage: canManageProp }: Sou
         ) : null}
       </div>
 
-      <DetailDrawer open={Boolean(detailTemplate)} title={detailTemplate?.label ?? '来源详情'} description="模板配置与采集入口" width="standard" onClose={() => setDetailTemplate(null)}>
+      <DetailDrawer open={Boolean(detailTemplate)} title={detailTemplate?.label ?? '来源详情'} description="运行状态与来源配置" width="standard" onClose={() => setDetailTemplate(null)}>
         {detailTemplate ? (
           <div className="source-page__detail">
             <dl className="source-page__detailGrid">
@@ -526,36 +468,56 @@ export function SourceSitesPage({ onUseTemplate, canManage: canManageProp }: Sou
               <DetailItem label="定时表达式" value={detailTemplate.cronExpr} />
               <DetailItem label="模板说明" value={detailTemplate.description} />
               <DetailItem label="标签" value={detailTemplate.tags.join('、') || '无'} />
+              <DetailItem label="当前状态" value={detailRuntime?.label ?? '未配置任务'} />
+              <DetailItem label="状态说明" value={detailRuntime?.note ?? '暂无运行信息'} />
             </dl>
-            <div className="source-page__dialogActions">
-              <button className="source-page__secondaryButton" type="button" onClick={() => setDetailTemplate(null)}>
-                关闭
-              </button>
-              {canManage ? (
-                <button
-                  className="source-page__primaryButton"
-                  type="button"
-                  onClick={() => {
-                    setEditorTemplate(detailTemplate)
-                    setDetailTemplate(null)
-                  }}
-                >
-                  编辑模板
-                </button>
-              ) : null}
-            </div>
+            {canManage ? (
+              <details className="source-page__advanced">
+                <summary>高级维护</summary>
+                <p>仅在来源配置或单个任务异常时使用；日常更新由系统自动完成。</p>
+                <div className="source-page__dialogActions">
+                  <button
+                    className="source-page__secondaryButton"
+                    type="button"
+                    onClick={() => {
+                      setEditorTemplate(detailTemplate)
+                      setDetailTemplate(null)
+                    }}
+                  >
+                    编辑模板
+                  </button>
+                  {detailRuntime?.canRetry && detailHealth?.task ? (
+                    <button
+                      className="source-page__secondaryButton"
+                      type="button"
+                      onClick={() => void handleRetryTask(detailTemplate)}
+                      disabled={runningTaskIds.includes(detailHealth.task.id)}
+                    >
+                      {runningTaskIds.includes(detailHealth.task.id) ? '重试中...' : '重试此来源'}
+                    </button>
+                  ) : null}
+                  <button
+                    className="source-page__secondaryButton source-page__secondaryButton--danger"
+                    type="button"
+                    onClick={() => setDeleteTemplate(detailTemplate)}
+                    disabled={pendingIds.includes(detailTemplate.id)}
+                  >
+                    删除模板
+                  </button>
+                </div>
+              </details>
+            ) : null}
           </div>
         ) : null}
       </DetailDrawer>
 
-      {canManage && (creating || editorTemplate) ? (
+      {canManage && editorTemplate ? (
         <TemplateEditorDialog
-          title={editorTemplate ? '编辑来源模板' : '新建来源模板'}
+          title="编辑来源模板"
           template={editorTemplate}
           saving={saving}
           onClose={() => {
             if (!saving) {
-              setCreating(false)
               setEditorTemplate(null)
             }
           }}
@@ -575,28 +537,6 @@ export function SourceSitesPage({ onUseTemplate, canManage: canManageProp }: Sou
         />
       ) : null}
 
-      {canManage && collectTemplate ? (
-        <ManualCollectDialog
-          template={collectTemplate}
-          pending={pendingIds.includes(collectTemplate.id)}
-          onClose={() => setCollectTemplate(null)}
-          onSubmit={async (url) => {
-            markPending(collectTemplate.id, true)
-            try {
-              const result = await client.post<ManualCollectionResponse>(`/v1/templates/tasks/${collectTemplate.id}/collect`, {
-                url,
-              })
-              setFeedback({ tone: 'success', message: `已登记到通知池 #${result.notice_id}` })
-              setCollectTemplate(null)
-            } catch (requestError) {
-              setFeedback({ tone: 'error', message: getErrorMessage(requestError) })
-              throw requestError
-            } finally {
-              markPending(collectTemplate.id, false)
-            }
-          }}
-        />
-      ) : null}
     </section>
   )
 }
@@ -610,21 +550,21 @@ function TemplateEditorDialog({
   onTest,
 }: {
   title: string
-  template: TemplateModel | null
+  template: TemplateModel
   saving: boolean
   onClose: () => void
-  onSubmit: (value: TemplateEditorValue, template: TemplateModel | null) => Promise<void>
+  onSubmit: (value: TemplateEditorValue, template: TemplateModel) => Promise<void>
   onTest: (payload: { start_url: string; parser_rules: string | null }) => Promise<TestTemplateResponse>
 }) {
   const [value, setValue] = useState<TemplateEditorValue>(() => ({
-    label: template?.label ?? '',
-    name: template?.name ?? '',
-    startUrl: template?.startUrl ?? '',
-    cronExpr: template?.cronExpr ?? '0 */6 * * *',
-    parserRules: template?.parserRules ?? '',
-    description: template?.description ?? '',
-    tags: template?.tags.join(', ') ?? '',
-    enabled: template?.enabled ?? true,
+    label: template.label,
+    name: template.name,
+    startUrl: template.startUrl,
+    cronExpr: template.cronExpr,
+    parserRules: template.parserRules ?? '',
+    description: template.description,
+    tags: template.tags.join(', '),
+    enabled: template.enabled,
   }))
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<string | null>(null)
@@ -717,59 +657,6 @@ function TemplateEditorDialog({
           </button>
           <button className="source-page__primaryButton" type="submit" disabled={saving || testing}>
             {saving ? '保存中...' : '保存模板'}
-          </button>
-        </div>
-      </form>
-    </DialogShell>
-  )
-}
-
-function ManualCollectDialog({
-  template,
-  pending,
-  onClose,
-  onSubmit,
-}: {
-  template: TemplateModel
-  pending: boolean
-  onClose: () => void
-  onSubmit: (url: string) => Promise<void>
-}) {
-  const [url, setUrl] = useState('')
-  const [error, setError] = useState<string | null>(null)
-
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (!url.startsWith('https://mp.weixin.qq.com/')) {
-      setError('请输入有效的公众号文章链接。')
-      return
-    }
-    setError(null)
-    try {
-      await onSubmit(url.trim())
-    } catch (requestError) {
-      setError(getErrorMessage(requestError))
-    }
-  }
-
-  return (
-    <DialogShell title="登记公众号文章" onClose={onClose}>
-      <form className="source-page__dialogForm" onSubmit={(event) => void handleSubmit(event)}>
-        <p className="source-page__dialogHint">当前模板：{template.label}</p>
-        <Field label="文章链接">
-          <input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://mp.weixin.qq.com/s/..." autoFocus />
-        </Field>
-        {error ? (
-          <div className="source-page__dialogError" role="alert">
-            {error}
-          </div>
-        ) : null}
-        <div className="source-page__dialogActions">
-          <button className="source-page__secondaryButton" type="button" onClick={onClose} disabled={pending}>
-            取消
-          </button>
-          <button className="source-page__primaryButton" type="submit" disabled={pending}>
-            {pending ? '登记中...' : '登记入库'}
           </button>
         </div>
       </form>
@@ -931,16 +818,12 @@ async function fetchLatestLog(client: ReturnType<typeof useAuth>['client'], task
 }
 
 function resolveCollectionKind(template: TemplateModel): TemplateFilter {
-  const parsed = tryParseRules(template.parserRules)
-  const collectionMode = parsed?.collection_mode?.toString().trim().toLowerCase()
   const description = template.description.toLowerCase()
-  if (collectionMode === 'manual' || manualTemplateIds.has(template.id)) return 'manual'
   if (authorizationTemplateIds.has(template.id) || description.includes('授权')) return 'needsAuth'
   return 'automatic'
 }
 
 function collectionKindLabel(kind: TemplateFilter) {
-  if (kind === 'manual') return '人工登记'
   if (kind === 'needsAuth') return '授权来源'
   if (kind === 'automatic') return '自动采集'
   return '全部来源'
@@ -950,9 +833,6 @@ function resolveRuntimeStatus(template: TemplateModel, health: TemplateHealth) {
   const task = health.task
   const log = health.latestLog
   const kind = resolveCollectionKind(template)
-  if (kind === 'manual') {
-    return { label: '人工登记', note: '当前模板仅登记人工提供的文章链接，不执行自动抓取。', canRetry: false, tone: 'warm' as const }
-  }
   if (kind === 'needsAuth') {
     return { label: '需授权', note: '当前来源依赖账号或平台授权，暂不自动运行。', canRetry: false, tone: 'warm' as const }
   }
@@ -976,15 +856,6 @@ function resolveRuntimeStatus(template: TemplateModel, health: TemplateHealth) {
     return { label: '运行正常', note: `最近成功：${formatDateTime(task.lastSuccessAt)}`, canRetry: false, tone: 'success' as const }
   }
   return { label: '等待首跑', note: '模板已配置，但还没有稳定的运行记录。', canRetry: false, tone: 'muted' as const }
-}
-
-function tryParseRules(raw: string | null) {
-  if (!raw?.trim()) return null
-  try {
-    return JSON.parse(raw) as Record<string, unknown>
-  } catch {
-    return null
-  }
 }
 
 function looksLikeParseFailure(text: string) {

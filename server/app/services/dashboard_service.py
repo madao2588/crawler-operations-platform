@@ -1,6 +1,7 @@
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 
+from app.core.config import get_settings
 from app.core.runtime_status import get_runtime_snapshot
 from app.repositories.data_repo import DataRepository
 from app.repositories.keyword_rule_repo import KeywordRepository
@@ -33,6 +34,7 @@ class DashboardService:
             database=snap["database"],
             scheduler=snap["scheduler"],
             scheduled_jobs=snap["scheduled_jobs"],
+            release_version=get_settings().release_version,
         )
 
         active_kws, high_pri_kws = await self.notice_service._get_keyword_lists()

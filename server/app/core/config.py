@@ -5,20 +5,17 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     app_name: str = "crawler_system"
+    release_version: str = "dev"
     api_prefix: str = "/v1"
     database_url: str = "sqlite:///./data.db"
     max_retry: int = 3
     timeout: int = 30
     outbound_proxy_url: str | None = None
     use_system_proxy: bool = True
-    outbound_no_proxy: str = (
-        "localhost,127.0.0.1,::1,"
-        "service.most.gov.cn,gdstc.gd.gov.cn,kjj.gz.gov.cn,"
-        "www.hp.gov.cn,www.hengqin.gov.cn,kjt.hunan.gov.cn,"
-        "kjj.changsha.gov.cn"
-    )
+    outbound_no_proxy: str = "localhost,127.0.0.1,::1"
     task_stale_minutes: int = 30
     startup_catch_up_enabled: bool = True
+    automatic_retry_minutes: int = 15
     snapshot_dir: str = "storage/snapshots"
     export_dir: str = "storage/exports"
     bootstrap_admin_username: str | None = None

@@ -40,6 +40,7 @@ class DashboardRuntime(BaseModel):
     database: str
     scheduler: str
     scheduled_jobs: int = Field(default=0, ge=0)
+    release_version: str = "dev"
 
 
 class DashboardCollectionIssue(BaseModel):

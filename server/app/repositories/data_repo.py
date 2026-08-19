@@ -319,11 +319,11 @@ class DataRepository:
             include_disabled_history=True,
         )
         start, end = _shanghai_business_day_utc_bounds()
-        business_date = _notice_business_date_expression()
         expressions = {
             "today_new_notices": and_(
-                business_date >= start,
-                business_date < end,
+                CollectedData.published_at.is_not(None),
+                CollectedData.published_at >= start,
+                CollectedData.published_at < end,
             ),
             "keyword_hit_notices": _contains_any(
                 _notice_keyword_blob(),
@@ -456,10 +456,7 @@ class DataRepository:
         )
         if enabled_only:
             statement = statement.where(
-                or_(
-                    Task.status == 1,
-                    func.json_extract(Task.parser_rules, "$.collection_mode") == "manual",
-                ),
+                Task.status == 1,
                 CollectedData.source_url != Task.start_url,
             )
         return await self.session.scalar(statement) or 0
@@ -763,13 +760,19 @@ def _notice_filters(
         filters.append(captured_on_today if captured_today else ~captured_on_today)
     if business_today is not None:
         start, end = _shanghai_business_day_utc_bounds()
-        business_date = _notice_business_date_expression()
-        business_on_today = and_(business_date >= start, business_date < end)
+        business_on_today = and_(
+            CollectedData.published_at.is_not(None),
+            CollectedData.published_at >= start,
+            CollectedData.published_at < end,
+        )
         filters.append(business_on_today if business_today else ~business_on_today)
     if business_week is not None:
         start, end = _shanghai_business_week_utc_bounds()
-        business_date = _notice_business_date_expression()
-        business_in_week = and_(business_date >= start, business_date < end)
+        business_in_week = and_(
+            CollectedData.published_at.is_not(None),
+            CollectedData.published_at >= start,
+            CollectedData.published_at < end,
+        )
         filters.append(business_in_week if business_week else ~business_in_week)
     if month:
         start, end = _shanghai_business_month_utc_bounds(month)
@@ -803,12 +806,7 @@ def _notice_filters(
         filters.append(CollectedData.id.in_(data_ids) if data_ids else false())
 
     if enabled_only and not include_disabled_history:
-        filters.append(
-            or_(
-                Task.status == 1,
-                func.json_extract(Task.parser_rules, "$.collection_mode") == "manual",
-            )
-    )
+        filters.append(Task.status == 1)
     if enabled_only:
         filters.append(CollectedData.source_url != Task.start_url)
     return filters, requires_task_join

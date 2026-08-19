@@ -1,6 +1,6 @@
 # React 前端
 
-这是现有 Flutter Web 客户端的并行迁移版本。后端接口保持不变，Flutter 工程仍保留在 `../frontend/`，可随时作为回滚入口。
+这是采集平台唯一的 Web 客户端，使用 React、TypeScript 和 Vite。
 
 ## 本地命令
 
@@ -10,13 +10,7 @@
 npm start
 ```
 
-该命令会构建 React、启动 FastAPI（`http://127.0.0.1:8000`），并在 `http://127.0.0.1:8093` 提供 React 页面。
-
-需要回到 Flutter 时：
-
-```powershell
-npm run start:flutter
-```
+该命令会启动 FastAPI（`http://127.0.0.1:8000`），并在 `http://127.0.0.1:8093` 提供 React 页面。
 
 只调试 React（后端需已启动）时：
 

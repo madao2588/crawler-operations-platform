@@ -61,10 +61,25 @@ describe('SystemManagementPage', () => {
       />,
     )
 
-    expect(await screen.findByText(/普通用户为只读模式/)).toBeInTheDocument()
+    expect(await screen.findByText(/系统会按计划自动采集/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /一键采集/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '新建任务' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /立即运行/ })).not.toBeInTheDocument()
+  })
+
+  it('creates a task from a saved template through the dedicated template action', async () => {
+    const user = userEvent.setup()
+    render(
+      <SystemManagementPage
+        initialTab="templates"
+        taskRepository={new FakeTaskRepository()}
+        templateRepository={new FakeTemplateRepository()}
+      />,
+    )
+
+    expect(await screen.findByText('国家药监局模板')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '使用模板' }))
+    expect(await screen.findByRole('dialog', { name: '新建任务' })).toBeInTheDocument()
   })
 
   it('applies initial log intent and normalizes the level filter', async () => {
@@ -96,13 +111,13 @@ describe('SystemManagementPage', () => {
       />,
     )
 
-    expect(await screen.findByRole('button', { name: /已启用/ })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /自动运行/ })).toBeInTheDocument()
     expect(screen.getByRole('region', { name: '任务结果' })).toHaveAttribute('data-scroll-region', 'table')
     expect(screen.queryByText('任务、模板和日志分区管理，列表行可打开详情，运行操作会实时反馈。')).not.toBeInTheDocument()
     expect(repository.lastEnabled).toBe('all')
     expect(repository.lastRun).toBe('success')
 
-    const enabledCard = screen.getByRole('button', { name: /已启用/ })
+    const enabledCard = screen.getByRole('button', { name: /自动运行/ })
     expect(enabledCard).toBeEnabled()
     await user.click(enabledCard)
 
@@ -119,7 +134,7 @@ describe('SystemManagementPage', () => {
     })
   })
 
-  it('opens task details from the row while keeping the run button independent', async () => {
+  it('presents collection as automatic and keeps per-source controls out of the daily task table', async () => {
     const repository = new FakeTaskRepository()
     const user = userEvent.setup()
     render(
@@ -129,26 +144,16 @@ describe('SystemManagementPage', () => {
       />,
     )
 
-    await user.click(await screen.findByRole('button', { name: '国家药监局采集' }))
+    expect(await screen.findByText('自动运行')).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: /立即刷新全部/ })).toHaveLength(1)
+    expect(screen.queryByRole('button', { name: /立即运行/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '新建任务' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '国家药监局采集' }))
     expect(await screen.findByRole('dialog', { name: '任务详情' })).toBeInTheDocument()
-
-    await user.click(screen.getByRole('button', { name: '关闭' }))
-    expect(screen.queryByRole('dialog', { name: '任务详情' })).not.toBeInTheDocument()
-
-    repository.runTaskDeferred = createDeferred<TaskRunResult>()
-    await user.click(screen.getByRole('button', { name: /立即运行/ }))
-    await user.click(screen.getByRole('button', { name: /提交中/ }))
-
-    expect(repository.runTaskCalls).toBe(1)
-    expect(screen.queryByRole('dialog', { name: '任务详情' })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /提交中/ })).toBeDisabled()
-
-    repository.runTaskDeferred.resolve({
-      task_id: 7,
-      status: 'queued',
-      recovered_stale_run: false,
-    })
-    expect(await screen.findByText(/已进入队列/)).toBeInTheDocument()
+    expect(screen.getAllByText('每 2 小时')).toHaveLength(2)
+    expect(screen.queryByRole('button', { name: /立即运行/ })).not.toBeInTheDocument()
+    expect(screen.getByText('高级维护')).toBeInTheDocument()
   })
 
   it('filters logs by level and opens the related task from a log row', async () => {
@@ -175,7 +180,7 @@ describe('SystemManagementPage', () => {
     expect(await screen.findByRole('dialog', { name: '任务详情' })).toBeInTheDocument()
   })
 
-  it('disables duplicated bulk-run triggers while one request is pending', async () => {
+  it('uses one bulk refresh trigger and disables it while the request is pending', async () => {
     const repository = new FakeTaskRepository()
     repository.runAllEnabledDeferred = createDeferred<RunAllEnabledResult>()
     const user = userEvent.setup()
@@ -186,15 +191,12 @@ describe('SystemManagementPage', () => {
       />,
     )
 
-    const heroTrigger = await screen.findByRole('button', { name: /一键采集/ })
-    const toolbarTrigger = screen.getByRole('button', { name: /刷新全部启用任务/ })
+    const heroTrigger = await screen.findByRole('button', { name: /立即刷新全部/ })
 
     await user.click(heroTrigger)
-    await user.click(toolbarTrigger)
 
     expect(repository.runAllEnabledCalls).toBe(1)
     expect(heroTrigger).toBeDisabled()
-    expect(toolbarTrigger).toBeDisabled()
 
     repository.runAllEnabledDeferred.resolve({
       queued_task_ids: [7],
@@ -337,14 +339,6 @@ class FakeTemplateRepository implements TemplateRepository {
     return template
   }
 
-  async collectManualSource() {
-    return {
-      source_id: template.id,
-      source_url: template.start_url,
-      status: 'queued',
-      notice_id: 42,
-    }
-  }
 }
 
 interface Deferred<T> {

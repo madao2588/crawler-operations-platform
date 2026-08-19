@@ -52,11 +52,7 @@ export function App() {
       onPasswordChange={auth.updatePassword}
     >
       <Suspense fallback={<LoadingState label="正在打开页面…" />}>
-        {renderRoute(
-          businessPath,
-          auth.session.user.role === 'admin',
-          (templateId) => navigate(`/system?template_id=${encodeURIComponent(templateId)}`),
-        )}
+        {renderRoute(businessPath, auth.session.user.role === 'admin')}
       </Suspense>
     </AppShell>
   )
@@ -65,7 +61,6 @@ export function App() {
 function renderRoute(
   path: BusinessPath,
   canManage: boolean,
-  onUseTemplate: (templateId: string) => void,
 ) {
   switch (path) {
     case '/notices':
@@ -73,7 +68,7 @@ function renderRoute(
     case '/keywords':
       return <KeywordRulesPage canManage={canManage} />
     case '/sources':
-      return <SourceSitesPage canManage={canManage} onUseTemplate={onUseTemplate} />
+      return <SourceSitesPage canManage={canManage} />
     case '/system':
       return <SystemManagementPage canManage={canManage} />
     default:

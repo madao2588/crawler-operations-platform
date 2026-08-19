@@ -248,27 +248,6 @@ class CrawlService:
             recovered_stale_run=recovered_stale_run,
         )
 
-    async def collect_manual_url(self, task_id: int, url: str) -> dict[str, object]:
-        task = await self.task_repo.get_by_id(task_id)
-        if task is None:
-            raise LookupError(f"Task {task_id} not found")
-
-        pipeline_module = import_module("app.engine.pipeline")
-        collector = getattr(pipeline_module, "collect_manual_url", None)
-        if not callable(collector):
-            raise RuntimeError("Manual collection runner is not implemented")
-
-        from app.repositories.data_repo import DataRepository
-
-        return await collector(
-            task_id=task.id,
-            url=url,
-            parser_rules=task.parser_rules,
-            log_repo=self.log_repo,
-            data_repo=DataRepository(self.task_repo.session),
-        )
-
-
 async def _mark_task_failed_after_dispatch_crash(task_id: int, exc: BaseException) -> None:
     """If the background runner dies, unblock queued/running tasks and persist the error."""
     msg = f"{type(exc).__name__}: {exc}"[:2000]

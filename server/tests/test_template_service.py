@@ -5,6 +5,7 @@ import pytest
 from app.repositories.template_repo import TemplateRepository
 from app.schemas.template import TaskTemplateCreate
 from app.services.template_service import (
+    DEMO_TEMPLATE_IDS,
     MEETING_ENABLED_TEMPLATE_IDS,
     MEETING_SOURCE_TEMPLATE_IDS,
     NEW_DRUG_SOURCE_TEMPLATES,
@@ -116,6 +117,7 @@ async def test_default_seed_data_covers_required_new_drug_sources(async_session,
 
     for item in NEW_DRUG_SOURCE_TEMPLATES:
         assert item["id"] in ids
+    assert not (ids & DEMO_TEMPLATE_IDS)
 
 
 @pytest.mark.asyncio
@@ -177,7 +179,7 @@ def test_all_government_project_sources_are_enabled_for_requirement_one() -> Non
     }
 
     assert enabled_ids == PROJECT_DECLARATION_ENABLED_TEMPLATE_IDS
-    assert enabled_ids < PROJECT_DECLARATION_SOURCE_TEMPLATE_IDS
+    assert enabled_ids == PROJECT_DECLARATION_SOURCE_TEMPLATE_IDS
     assert enabled_ids == {
         "most_project_declaration",
         "guangdong_stc_notices",
@@ -305,34 +307,6 @@ def test_requirement_one_government_sources_use_site_specific_contracts() -> Non
     assert "#zoomcon" in hunan_rules["content"]
 
 
-def test_wechat_sources_are_manual_only_with_explicit_host_allowlist() -> None:
-    wechat_ids = {
-        "wechat_k_innovation",
-        "wechat_hengqin_biomed",
-        "wechat_competitor_intelligence",
-        "wechat_industry_meetings",
-    }
-    templates = {
-        str(item["id"]): item
-        for item in NEW_DRUG_SOURCE_TEMPLATES
-        if item["id"] in wechat_ids
-    }
-
-    assert set(templates) == wechat_ids
-    for template in templates.values():
-        rules = json.loads(template["parser_rules"])
-        assert template["enabled"] is False
-        assert rules["collection_mode"] == "manual"
-        assert rules["allowed_hosts"] == ["mp.weixin.qq.com"]
-        assert rules["title"] == "css:#activity-name, h1.rich_media_title"
-        assert rules["content"] == "css:#js_content"
-        assert rules["published_at"] == "css:#publish_time"
-
-    meeting_rules = json.loads(templates["wechat_industry_meetings"]["parser_rules"])
-    assert meeting_rules["category"] == "行业会议"
-    assert meeting_rules["metadata"]["kind"] == "industry_meeting"
-
-
 def test_industry_meeting_templates_expose_executable_or_explicitly_blocked_contracts() -> None:
     templates = {
         item["id"]: item
@@ -343,7 +317,6 @@ def test_industry_meeting_templates_expose_executable_or_explicitly_blocked_cont
             "cpa_association",
             "bioon_meetings",
             "cphi_china_events",
-            "wechat_industry_meetings",
         }
     }
 
@@ -352,7 +325,6 @@ def test_industry_meeting_templates_expose_executable_or_explicitly_blocked_cont
         "cpa_association",
         "bioon_meetings",
         "cphi_china_events",
-        "wechat_industry_meetings",
     }
 
     dxy_rules = json.loads(templates["dxy_pharmacy_meetings"]["parser_rules"])
@@ -425,15 +397,6 @@ def test_requirement_three_sources_have_executable_and_authorized_contracts() ->
     assert pharnexcloud["enabled"] is False
     assert pharnexcloud["parser_rules"] is None
 
-    wechat = templates["wechat_competitor_intelligence"]
-    assert wechat["enabled"] is False
-    assert "竞品信息" in wechat["tags"]
-    wechat_rules = json.loads(wechat["parser_rules"])
-    assert wechat_rules["category"] == "竞品信息"
-    assert wechat_rules["metadata"]["kind"] == "competitor_intelligence"
-    assert wechat_rules["metadata"]["source"] == "WeChat"
-
-
 def test_requirement_two_meeting_sources_use_site_specific_contracts() -> None:
     templates = {str(item["id"]): item for item in NEW_DRUG_SOURCE_TEMPLATES}
 
@@ -443,7 +406,6 @@ def test_requirement_two_meeting_sources_use_site_specific_contracts() -> None:
             "cpa_association",
             "bioon_meetings",
             "cphi_china_events",
-            "wechat_industry_meetings",
         }
     )
     assert MEETING_ENABLED_TEMPLATE_IDS <= MEETING_SOURCE_TEMPLATE_IDS

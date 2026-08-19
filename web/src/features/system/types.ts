@@ -71,13 +71,6 @@ export interface TaskTemplate {
   last_used_at: string | null
 }
 
-export interface ManualCollectionResult {
-  source_id: string
-  source_url: string
-  status: string
-  notice_id: number
-}
-
 export interface TaskUpsertInput {
   name: string
   start_url: string
@@ -144,7 +137,6 @@ export interface TemplateRepository {
   updateTaskTemplate(templateId: string, input: TaskTemplateInput): Promise<TaskTemplate>
   deleteTaskTemplate(templateId: string): Promise<void>
   trackTaskTemplateUse(templateId: string): Promise<TaskTemplate>
-  collectManualSource(templateId: string, url: string): Promise<ManualCollectionResult>
 }
 
 export type SystemTab = 'tasks' | 'templates' | 'logs' | 'accounts'

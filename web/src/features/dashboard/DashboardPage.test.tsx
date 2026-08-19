@@ -47,6 +47,7 @@ describe('DashboardPage', () => {
     expect(await screen.findByRole('heading', { name: '今日监测概览' })).toBeInTheDocument()
     expect(screen.getByText('数据库 正常')).toBeInTheDocument()
     expect(screen.getByText('调度 正常 · 6 项')).toBeInTheDocument()
+    expect(screen.getByText('版本 dev')).toBeInTheDocument()
     expect(screen.getByRole('region', { name: '看板内容' })).toHaveAttribute('data-scroll-region', 'content')
     expect(screen.queryByText('进入今日采集结果，直接看当日新增。')).not.toBeInTheDocument()
     expect(screen.queryByText('查看项目申报、指南、征集类线索。')).not.toBeInTheDocument()

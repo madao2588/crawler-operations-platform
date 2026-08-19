@@ -68,6 +68,5 @@ npm run release:intranet
 
 ## 外部来源边界
 
-- 公众号不承诺自动遍历，由使用人员自行查询；已有文章链接仍可人工登记。
 - 摩熵医药需要合法授权，不会绕过登录或付费限制。
 - 外部网站可能临时改版、限流或触发验证码；最终交付机还应分别运行 `check_requirement1_sources.py`、`check_requirement2_meetings.py` 和 `check_requirement3_pubmed.py`，留存需求 1–3 原始 JSON 证据。

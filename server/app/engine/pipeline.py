@@ -545,37 +545,6 @@ async def _collect_and_store_one_retrying(
     raise last_exc
 
 
-async def collect_manual_url(
-    *,
-    task_id: int,
-    url: str,
-    parser_rules: str | None,
-    log_repo: LogRepository,
-    data_repo: DataRepository,
-) -> dict[str, object]:
-    rules = _load_rules(parser_rules)
-    if not rules or rules.get("collection_mode") != "manual":
-        raise ValueError(f"Task {task_id} is not a manual collection source")
-
-    outcome = await _collect_and_store_one_retrying(
-        task_id=task_id,
-        run_id=f"manual-{uuid.uuid4().hex[:12]}",
-        page_url=url,
-        parser_rules=detail_rules_json(rules),
-        log_repo=log_repo,
-        data_repo=data_repo,
-        crawl_rules=rules,
-    )
-    stored = await data_repo.get_by_source_url(url)
-    if stored is None:
-        raise RuntimeError(f"Manual collection did not produce a notice for {url}")
-    return {
-        "status": outcome,
-        "notice_id": stored.id,
-        "source_url": url,
-    }
-
-
 async def _collect_meeting_table(
     *,
     task_id: int,

@@ -1,6 +1,17 @@
 . (Join-Path $PSScriptRoot "_common.ps1")
 
-$manifest = Join-Path $DeploymentRoot "SHA256SUMS.txt"
+function Get-Sha256Hex([string]$Path) {
+  $stream = [IO.File]::OpenRead($Path)
+  $sha256 = [Security.Cryptography.SHA256]::Create()
+  try {
+    return [BitConverter]::ToString($sha256.ComputeHash($stream)).Replace("-", "")
+  } finally {
+    $sha256.Dispose()
+    $stream.Dispose()
+  }
+}
+
+$manifest = Join-Path $PackageRoot "SHA256SUMS.txt"
 if (!(Test-Path -LiteralPath $manifest)) {
   throw "Package manifest is missing: $manifest"
 }
@@ -15,11 +26,11 @@ foreach ($line in Get-Content -LiteralPath $manifest -Encoding UTF8) {
   }
   $expected = $matches[1].ToUpperInvariant()
   $relative = $matches[2].Replace('/', [IO.Path]::DirectorySeparatorChar)
-  $path = Join-Path $DeploymentRoot $relative
+  $path = Join-Path $PackageRoot $relative
   if (!(Test-Path -LiteralPath $path -PathType Leaf)) {
     throw "Package file is missing: $relative"
   }
-  $actual = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+  $actual = Get-Sha256Hex -Path $path
   if ($actual -ne $expected) {
     throw "Package file checksum mismatch: $relative"
   }

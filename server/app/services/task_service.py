@@ -1,6 +1,4 @@
-import json
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlparse
 
 from apscheduler.jobstores.base import JobLookupError
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -20,16 +18,17 @@ from app.schemas.task import (
     TaskStatus,
     TaskUpdate,
 )
-from app.schemas.template import ManualCollectionRead
 from app.services.crawl_service import CrawlService, TaskRunConflictError, dispatch_task_run
 from app.services.template_service import NEW_DRUG_SOURCE_TEMPLATES
-from app.utils.url_security import UnsafeTargetError, assert_safe_outbound_url, normalize_allowed_hosts
 from app.utils.task_retry import is_retry_backoff_active
 
 
 DEMO_TASK_START_URLS = frozenset(
     {
         "https://example.com",
+        "https://example.com/news",
+        "https://example.com/tenders",
+        "https://example.com/announcements",
         "https://movie.douban.com/top250",
         "https://www.xiaohongshu.com/explore",
         "https://store.steampowered.com/search/?filter=topsellers",
@@ -132,46 +131,6 @@ class TaskService:
     async def run_task_now(self, task_id: int) -> TaskRunPayload:
         await self._get_task_or_raise(task_id)
         return await self.crawl_service.trigger_now(task_id)
-
-    async def collect_manual_source(
-        self,
-        source_id: str,
-        url: str,
-    ) -> ManualCollectionRead:
-        source = next(
-            (
-                item
-                for item in NEW_DRUG_SOURCE_TEMPLATES
-                if str(item["id"]) == source_id
-            ),
-            None,
-        )
-        rules = json.loads(source["parser_rules"]) if source and source.get("parser_rules") else {}
-        if rules.get("collection_mode") != "manual":
-            raise ValueError(f"Source {source_id} does not support manual collection")
-
-        parsed_url = urlparse(url.strip())
-        allowed_hosts = normalize_allowed_hosts(
-            host for host in rules.get("allowed_hosts", []) if isinstance(host, str)
-        )
-        if (
-            parsed_url.scheme not in {"http", "https"}
-            or not parsed_url.hostname
-            or parsed_url.hostname.lower().rstrip(".") not in allowed_hosts
-        ):
-            allowed = ", ".join(sorted(allowed_hosts)) or "configured source host"
-            raise ValueError(f"Manual source URL must use {allowed}")
-        try:
-            safe_url = assert_safe_outbound_url(url.strip())
-        except UnsafeTargetError as exc:
-            raise ValueError(str(exc)) from exc
-
-        task = await self.task_repo.get_by_name(str(source["name"]))
-        if task is None:
-            raise LookupError(f"Task for source {source_id} not found")
-
-        result = await self.crawl_service.collect_manual_url(task.id, safe_url)
-        return ManualCollectionRead(source_id=source_id, **result)
 
     async def run_all_enabled_tasks_now(self) -> RunAllEnabledPayload:
         enabled_tasks = await self.task_repo.list_enabled()
@@ -298,6 +257,62 @@ class TaskService:
             errors=errors,
         )
 
+    async def retry_due_failed_tasks(
+        self,
+        *,
+        now: datetime | None = None,
+    ) -> RunAllEnabledPayload:
+        current = now or datetime.now(timezone.utc)
+        failed_tasks = await self.task_repo.list_retryable_enabled()
+        queued: list[int] = []
+        skipped: list[int] = []
+        deferred: list[DeferredTaskPayload] = []
+        errors: list[str] = []
+        for task in failed_tasks:
+            backoff_active, failure_kind, next_retry_at = is_retry_backoff_active(
+                now=current,
+                last_run_status=getattr(task, "last_run_status", None),
+                last_run_at=getattr(task, "last_run_at", None),
+                last_error_message=getattr(task, "last_error_message", None),
+            )
+            if backoff_active and failure_kind and next_retry_at is not None:
+                deferred.append(
+                    DeferredTaskPayload(
+                        task_id=task.id,
+                        task_name=task.name,
+                        failure_kind=failure_kind,
+                        next_retry_at=next_retry_at,
+                        retry_in_seconds=max(0, int((next_retry_at - current).total_seconds())),
+                    )
+                )
+                continue
+            try:
+                await self.crawl_service.trigger_now(task.id)
+                queued.append(task.id)
+            except TaskRunConflictError:
+                skipped.append(task.id)
+            except (LookupError, RuntimeError) as exc:
+                errors.append(f"task {task.id}: {exc}")
+
+        await self.log_repo.create(
+            level="WARNING" if errors else "INFO",
+            task_id=None,
+            message=(
+                "automatic retry sweep: "
+                f"queued={len(queued)} skipped={len(skipped)} "
+                f"deferred={len(deferred)} errors={len(errors)}"
+            ),
+            error_stack="\n".join(errors) if errors else None,
+        )
+        return RunAllEnabledPayload(
+            queued_task_ids=queued,
+            skipped_task_ids=skipped,
+            recovered_task_ids=[],
+            quarantined_task_ids=[],
+            deferred_tasks=deferred,
+            errors=errors,
+        )
+
     async def ensure_example_task(self) -> TaskRead | None:
         if await self.task_repo.count_all() > 0:
             return None
@@ -320,11 +335,7 @@ class TaskService:
                 message=f"Removed {deleted_count} demo tasks before seeding required source tasks",
             )
 
-        existing_tasks = await self.task_repo.list_all()
-        existing_by_name = {task.name: task for task in existing_tasks}
-        existing_by_start_url: dict[str, list[Task]] = {}
-        for task in existing_tasks:
-            existing_by_start_url.setdefault(task.start_url, []).append(task)
+        remaining_tasks = list(await self.task_repo.list_all())
         canonical_url_counts: dict[str, int] = {}
         for source in NEW_DRUG_SOURCE_TEMPLATES:
             start_url = str(source["start_url"])
@@ -333,11 +344,20 @@ class TaskService:
         for source in NEW_DRUG_SOURCE_TEMPLATES:
             name = str(source["name"])
             start_url = str(source["start_url"])
-            existing = existing_by_name.get(name)
-            if existing is None and canonical_url_counts[start_url] == 1:
-                same_url = existing_by_start_url.get(start_url, [])
-                if len(same_url) == 1:
-                    existing = same_url[0]
+            candidates = [task for task in remaining_tasks if task.name == name]
+            if canonical_url_counts[start_url] == 1:
+                candidates.extend(
+                    task
+                    for task in remaining_tasks
+                    if task.start_url == start_url and task not in candidates
+                )
+            candidates.sort(key=lambda task: task.id)
+            existing = candidates[0] if candidates else None
+            duplicate_tasks = candidates[1:]
+            for duplicate in duplicate_tasks:
+                self._remove_job(duplicate.id)
+                await self.task_repo.merge_duplicate(retained=existing, duplicate=duplicate)
+                remaining_tasks.remove(duplicate)
             if existing is not None:
                 update = TaskUpdate(
                     name=name,
@@ -358,10 +378,9 @@ class TaskService:
                     status=TaskStatus.ENABLED if source["enabled"] else TaskStatus.DISABLED,
                 )
             )
-            existing_by_name[created.name] = await self.task_repo.get_by_id(created.id) or existing
-            created_task = existing_by_name[created.name]
+            created_task = await self.task_repo.get_by_id(created.id)
             if created_task is not None:
-                existing_by_start_url.setdefault(start_url, []).append(created_task)
+                remaining_tasks.append(created_task)
 
     async def _sync_scheduler(self, task: Task) -> None:
         if int(task.status) != int(TaskStatus.ENABLED):

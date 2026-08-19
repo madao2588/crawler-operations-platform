@@ -313,12 +313,12 @@ async def test_list_paginated_enabled_only_hides_task_entry_pages(async_session)
 
 
 @pytest.mark.asyncio
-async def test_list_paginated_includes_manual_source_items_from_disabled_task(async_session) -> None:
+async def test_list_paginated_excludes_items_from_disabled_task(async_session) -> None:
     async_session.add(
         Task(
-            name="公众号人工链接",
-            start_url="https://mp.weixin.qq.com/",
-            parser_rules='{"collection_mode": "manual"}',
+            name="已停用来源",
+            start_url="https://disabled.example/",
+            parser_rules='{"list":"article"}',
             cron_expr="0 9 * * *",
             status=int(TaskStatus.DISABLED),
         )
@@ -328,13 +328,13 @@ async def test_list_paginated_includes_manual_source_items_from_disabled_task(as
     async_session.add(
         CollectedData(
             task_id=task_id,
-            title="公众号项目申报通知",
+            title="已停用来源的历史通知",
             content_html="<p>正文</p>",
             content_text="正文",
-            source_url="https://mp.weixin.qq.com/s/example",
+            source_url="https://disabled.example/article",
             snapshot_path=None,
             quality_score=80,
-            content_hash="manual-wechat",
+            content_hash="disabled-history",
         )
     )
     await async_session.commit()
@@ -345,8 +345,8 @@ async def test_list_paginated_includes_manual_source_items_from_disabled_task(as
         enabled_only=True,
     )
 
-    assert total == 1
-    assert [item.title for item in items] == ["公众号项目申报通知"]
+    assert total == 0
+    assert items == []
 
 
 @pytest.mark.asyncio

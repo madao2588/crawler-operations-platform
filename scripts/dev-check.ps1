@@ -4,17 +4,11 @@ $ErrorActionPreference = "Stop"
 
 $crawlerRoot = Split-Path $PSScriptRoot -Parent
 $serverDir = Join-Path $crawlerRoot "server"
-$frontendDir = Join-Path $crawlerRoot "frontend"
 $reactFrontendDir = Join-Path $crawlerRoot "web"
 $pythonWrapper = Join-Path $PSScriptRoot "pythonw.ps1"
-$flutterWrapper = Join-Path $PSScriptRoot "flutterw.ps1"
 
 if (!(Test-Path $pythonWrapper)) {
   throw "Missing Python wrapper: $pythonWrapper"
-}
-
-if (!(Test-Path $flutterWrapper)) {
-  throw "Missing Flutter wrapper: $flutterWrapper"
 }
 
 if (!(Test-Path (Join-Path $reactFrontendDir "package.json"))) {
@@ -43,35 +37,18 @@ try {
 }
 
 Write-Host "Running frontend checks..."
-Push-Location $frontendDir
-try {
-  Write-Host "Running React frontend typecheck..."
-  & npm.cmd --prefix $reactFrontendDir run typecheck
-  if ($LASTEXITCODE -ne 0) {
-    exit $LASTEXITCODE
-  }
-
-  Write-Host "Running React frontend tests..."
-  & npm.cmd --prefix $reactFrontendDir test
-  if ($LASTEXITCODE -ne 0) {
-    exit $LASTEXITCODE
-  }
-
-  Write-Host "Running React frontend build..."
-  & npm.cmd --prefix $reactFrontendDir run build
-  if ($LASTEXITCODE -ne 0) {
-    exit $LASTEXITCODE
-  }
-
-  Write-Host "Running Flutter frontend analyze..."
-  & $flutterWrapper analyze
-  if ($LASTEXITCODE -ne 0) {
-    exit $LASTEXITCODE
-  }
-
-  Write-Host "Running Flutter frontend tests..."
-  & $flutterWrapper test
+Write-Host "Running React frontend typecheck..."
+& npm.cmd --prefix $reactFrontendDir run typecheck
+if ($LASTEXITCODE -ne 0) {
   exit $LASTEXITCODE
-} finally {
-  Pop-Location
 }
+
+Write-Host "Running React frontend tests..."
+& npm.cmd --prefix $reactFrontendDir test
+if ($LASTEXITCODE -ne 0) {
+  exit $LASTEXITCODE
+}
+
+Write-Host "Running React frontend build..."
+& npm.cmd --prefix $reactFrontendDir run build
+exit $LASTEXITCODE

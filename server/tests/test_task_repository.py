@@ -3,6 +3,8 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy import select
 
+from app.models.data import CollectedData
+from app.models.log import LogEntry
 from app.models.task import Task
 from app.repositories.log_repo import LogRepository
 from app.repositories.task_repo import TaskRepository
@@ -259,6 +261,50 @@ async def test_quarantine_failed_enabled_disables_failed_tasks(async_session) ->
 
 
 @pytest.mark.asyncio
+async def test_list_retryable_enabled_includes_partial_and_excludes_healthy_disabled_tasks(async_session) -> None:
+    async_session.add_all(
+        [
+            Task(
+                name="Retry this source",
+                start_url="https://retry.example",
+                cron_expr="* * * * *",
+                status=int(TaskStatus.ENABLED),
+                last_run_status="failed",
+            ),
+            Task(
+                name="Retry partially completed source",
+                start_url="https://partial.example",
+                cron_expr="* * * * *",
+                status=int(TaskStatus.ENABLED),
+                last_run_status="partial",
+            ),
+            Task(
+                name="Healthy source",
+                start_url="https://healthy-retry.example",
+                cron_expr="* * * * *",
+                status=int(TaskStatus.ENABLED),
+                last_run_status="success",
+            ),
+            Task(
+                name="Disabled failure",
+                start_url="https://disabled-retry.example",
+                cron_expr="* * * * *",
+                status=int(TaskStatus.DISABLED),
+                last_run_status="failed",
+            ),
+        ]
+    )
+    await async_session.commit()
+
+    items = await TaskRepository(async_session).list_retryable_enabled()
+
+    assert [task.name for task in items] == [
+        "Retry this source",
+        "Retry partially completed source",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_list_paginated_sort_last_run_at_desc_nulls_last(async_session) -> None:
     base = datetime(2025, 1, 1, 12, 0, 0, tzinfo=UTC)
     async_session.add_all(
@@ -403,73 +449,93 @@ async def test_ensure_required_source_tasks_renames_unique_source_without_duplic
 
 
 @pytest.mark.asyncio
-async def test_collect_manual_source_accepts_only_fixed_wechat_source_and_host(async_session) -> None:
-    class FakeCrawlService:
-        def __init__(self) -> None:
-            self.calls: list[tuple[int, str]] = []
-
-        async def collect_manual_url(self, task_id: int, url: str):
-            self.calls.append((task_id, url))
-            return {
-                "status": "stored",
-                "notice_id": 88,
-                "source_url": url,
-            }
+async def test_ensure_required_source_tasks_removes_demo_variants_and_canonical_duplicates(
+    async_session,
+) -> None:
+    canonical = next(
+        source
+        for source in NEW_DRUG_SOURCE_TEMPLATES
+        if source["id"] == "pubmed_literature"
+    )
+    retained_task = Task(
+        name=str(canonical["name"]),
+        start_url=str(canonical["start_url"]),
+        cron_expr="0 1 * * *",
+        status=int(TaskStatus.DISABLED),
+    )
+    duplicate_task = Task(
+        name=str(canonical["name"]),
+        start_url=str(canonical["start_url"]),
+        cron_expr="0 2 * * *",
+        status=int(TaskStatus.ENABLED),
+    )
+    async_session.add_all(
+        [
+            retained_task,
+            duplicate_task,
+            Task(
+                name="News Monitor",
+                start_url="https://example.com/news",
+                cron_expr="0 */6 * * *",
+                status=int(TaskStatus.ENABLED),
+            ),
+            Task(
+                name="Tender Notice Monitor",
+                start_url="https://example.com/tenders",
+                cron_expr="0 */6 * * *",
+                status=int(TaskStatus.ENABLED),
+            ),
+            Task(
+                name="Portal Announcement Monitor",
+                start_url="https://example.com/announcements",
+                cron_expr="0 */6 * * *",
+                status=int(TaskStatus.ENABLED),
+            ),
+        ]
+    )
+    await async_session.flush()
+    async_session.add_all(
+        [
+            CollectedData(
+                task_id=duplicate_task.id,
+                title="重复任务已经采集的公告",
+                content_text="应归并到保留任务",
+                source_url="https://pubmed.ncbi.nlm.nih.gov/duplicate-history",
+                content_hash="duplicate-task-history",
+                category="竞品信息",
+                quality_score=80,
+            ),
+            LogEntry(
+                task_id=duplicate_task.id,
+                level="INFO",
+                message="duplicate task history",
+            ),
+        ]
+    )
+    await async_session.commit()
 
     task_repo = TaskRepository(async_session)
     log_repo = LogRepository(async_session)
-    crawl_service = FakeCrawlService()
     service = TaskService(
         task_repo=task_repo,
         log_repo=log_repo,
-        crawl_service=crawl_service,  # type: ignore[arg-type]
+        crawl_service=CrawlService(task_repo=task_repo, log_repo=log_repo),
     )
+
     await service.ensure_required_source_tasks()
-    article_url = "https://mp.weixin.qq.com/s/example-article"
+    items = await task_repo.list_all()
+    canonical_items = [task for task in items if task.name == canonical["name"]]
 
-    result = await service.collect_manual_source("wechat_k_innovation", article_url)
-
-    assert result.status == "stored"
-    assert result.notice_id == 88
-    assert result.source_url == article_url
-    assert len(crawl_service.calls) == 1
-
-    with pytest.raises(ValueError, match="mp.weixin.qq.com"):
-        await service.collect_manual_source(
-            "wechat_k_innovation",
-            "https://example.com/not-wechat",
-        )
-    with pytest.raises(ValueError, match="manual collection"):
-        await service.collect_manual_source(
-            "most_project_declaration",
-            article_url,
-        )
-
-
-@pytest.mark.asyncio
-async def test_collect_manual_source_rejects_allowed_host_that_resolves_private_ip(async_session, monkeypatch) -> None:
-    class FakeCrawlService:
-        async def collect_manual_url(self, _task_id: int, _url: str):
-            raise AssertionError("should not collect unsafe manual URL")
-
-    task_repo = TaskRepository(async_session)
-    log_repo = LogRepository(async_session)
-    service = TaskService(
-        task_repo=task_repo,
-        log_repo=log_repo,
-        crawl_service=FakeCrawlService(),  # type: ignore[arg-type]
+    assert len(items) == len(NEW_DRUG_SOURCE_TEMPLATES)
+    assert len(canonical_items) == 1
+    assert canonical_items[0].cron_expr == canonical["cron_expr"]
+    assert canonical_items[0].status == int(TaskStatus.ENABLED)
+    assert all(task.start_url not in DEMO_TASK_START_URLS for task in items)
+    notice_task_id = await async_session.scalar(
+        select(CollectedData.task_id).where(CollectedData.content_hash == "duplicate-task-history")
     )
-    await service.ensure_required_source_tasks()
-
-    def fake_assert_safe_outbound_url(_url: str) -> str:
-        from app.utils.url_security import UnsafeTargetError
-
-        raise UnsafeTargetError("Resolved address 10.0.0.10 for host mp.weixin.qq.com is not public")
-
-    monkeypatch.setattr("app.services.task_service.assert_safe_outbound_url", fake_assert_safe_outbound_url)
-
-    with pytest.raises(ValueError, match="not public"):
-        await service.collect_manual_source(
-            "wechat_k_innovation",
-            "https://mp.weixin.qq.com/s/private-hop",
-        )
+    log_task_id = await async_session.scalar(
+        select(LogEntry.task_id).where(LogEntry.message == "duplicate task history")
+    )
+    assert notice_task_id == canonical_items[0].id == retained_task.id
+    assert log_task_id == retained_task.id

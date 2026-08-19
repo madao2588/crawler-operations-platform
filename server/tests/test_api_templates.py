@@ -1,4 +1,3 @@
-import json
 import uuid
 
 from fastapi.testclient import TestClient
@@ -76,15 +75,14 @@ def test_template_create_update_use_delete_roundtrip(
     assert template_id not in ids
 
 
-def test_manual_source_collection_rejects_non_wechat_host(
+def test_template_specific_collection_endpoint_is_not_available(
     asgi_test_client: TestClient,
     auth_headers: dict[str, str],
 ) -> None:
     response = asgi_test_client.post(
-        "/v1/templates/tasks/wechat_k_innovation/collect",
+        "/v1/templates/tasks/example_source/collect",
         headers=auth_headers,
-        json={"url": "https://example.com/not-a-wechat-article"},
+        json={"url": "https://example.com/article"},
     )
 
-    assert response.status_code == 400
-    assert "mp.weixin.qq.com" in json.dumps(response.json(), ensure_ascii=False)
+    assert response.status_code == 404

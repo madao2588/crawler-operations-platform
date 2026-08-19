@@ -4,6 +4,8 @@ from datetime import datetime
 from sqlalchemy import asc, desc, func, nullsfirst, nullslast, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.data import CollectedData
+from app.models.log import LogEntry
 from app.models.task import Task
 from app.schemas.task import TaskCreate, TaskStatus, TaskUpdate
 
@@ -39,8 +41,11 @@ class TaskRepository:
         last_run: str | None = None,
         sort_by: str | None = None,
         sort_dir: str | None = None,
+        excluded_names: Collection[str] | None = None,
     ) -> tuple[Sequence[Task], int]:
         filters: list = []
+        if excluded_names:
+            filters.append(Task.name.notin_(list(excluded_names)))
         needle = (search or "").strip()
         if needle:
             n = needle.lower()
@@ -109,6 +114,18 @@ class TaskRepository:
 
     async def list_enabled(self) -> Sequence[Task]:
         statement = select(Task).where(Task.status == int(TaskStatus.ENABLED)).order_by(Task.id.asc())
+        result = await self.session.execute(statement)
+        return result.scalars().all()
+
+    async def list_retryable_enabled(self) -> Sequence[Task]:
+        statement = (
+            select(Task)
+            .where(
+                Task.status == int(TaskStatus.ENABLED),
+                Task.last_run_status.in_(("failed", "partial")),
+            )
+            .order_by(Task.id.asc())
+        )
         result = await self.session.execute(statement)
         return result.scalars().all()
 
@@ -263,6 +280,23 @@ class TaskRepository:
 
     async def delete(self, task: Task) -> None:
         await self.session.delete(task)
+        await self.session.commit()
+
+    async def merge_duplicate(self, *, retained: Task, duplicate: Task) -> None:
+        """Move duplicate history to the retained task before removing its config."""
+        if retained.id == duplicate.id:
+            return
+        await self.session.execute(
+            update(CollectedData)
+            .where(CollectedData.task_id == duplicate.id)
+            .values(task_id=retained.id)
+        )
+        await self.session.execute(
+            update(LogEntry)
+            .where(LogEntry.task_id == duplicate.id)
+            .values(task_id=retained.id)
+        )
+        await self.session.delete(duplicate)
         await self.session.commit()
 
     async def delete_by_start_urls(self, urls: Collection[str]) -> int:

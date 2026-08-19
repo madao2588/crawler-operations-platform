@@ -68,6 +68,7 @@ async def root() -> ApiResponse[HealthPayload]:
         data=HealthPayload(
             status=snap["status"],
             app_name=settings.app_name,
+            release_version=settings.release_version,
             database=snap["database"],
             scheduler=snap["scheduler"],
             scheduled_jobs=snap["scheduled_jobs"],

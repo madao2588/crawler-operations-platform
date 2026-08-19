@@ -129,7 +129,11 @@ async def fetch_static(
     if headers:
         merged.update(headers)
 
+    proxy_attempts = _outbound_proxy_attempts(safe_url, proxy)
+    attempt_index = 0
+
     async def _request() -> str:
+        nonlocal attempt_index
         client_timeout = httpx.Timeout(timeout_sec)
         client_kwargs: dict[str, object] = {
             "timeout": client_timeout,
@@ -137,7 +141,8 @@ async def fetch_static(
             "headers": merged,
             "trust_env": False,
         }
-        resolved_proxy = resolve_outbound_proxy(safe_url, proxy)
+        resolved_proxy = proxy_attempts[attempt_index % len(proxy_attempts)]
+        attempt_index += 1
         httpx_proxy = _build_httpx_proxy(resolved_proxy)
         if httpx_proxy is not None:
             client_kwargs["proxy"] = httpx_proxy
@@ -193,11 +198,17 @@ async def fetch_dynamic(
     user_agent = merged.get("User-Agent") or DEFAULT_HEADERS["User-Agent"]
     extra_headers = {k: v for k, v in merged.items() if k.lower() != "user-agent"}
 
+    proxy_attempts = _outbound_proxy_attempts(safe_url, proxy)
+    attempt_index = 0
+
     async def _request() -> str:
+        nonlocal attempt_index
         async with async_playwright() as playwright:
             launch_kwargs: dict[str, object] = {"headless": True}
+            resolved_proxy = proxy_attempts[attempt_index % len(proxy_attempts)]
+            attempt_index += 1
             browser_proxy = _build_playwright_proxy(
-                resolve_outbound_proxy(safe_url, proxy),
+                resolved_proxy,
             )
             if browser_proxy is not None:
                 launch_kwargs["proxy"] = browser_proxy
@@ -269,6 +280,16 @@ async def fetch_dynamic(
                 await browser.close()
 
     return await _with_retry(_request)
+
+
+def _outbound_proxy_attempts(
+    url: str,
+    explicit_proxy: Mapping[str, object] | None,
+) -> tuple[dict[str, str] | None, ...]:
+    resolved = resolve_outbound_proxy(url, explicit_proxy)
+    if resolved is None or _normalize_proxy(explicit_proxy) is not None:
+        return (resolved,)
+    return (resolved, None)
 
 
 def resolve_outbound_proxy(

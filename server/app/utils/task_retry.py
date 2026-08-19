@@ -61,7 +61,7 @@ def next_retry_at_for_task(
 ) -> tuple[str | None, datetime | None]:
     status = (last_run_status or "").strip().lower()
     run_at = as_utc(last_run_at)
-    if status != "failed" or run_at is None:
+    if status not in {"failed", "partial"} or run_at is None:
         return None, None
     window = retry_window_for_failure(last_error_message)
     return window.failure_kind, run_at + window.retry_after

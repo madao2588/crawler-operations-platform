@@ -12,7 +12,7 @@ SERVER_DIR = REPO_ROOT / "server"
 if str(SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(SERVER_DIR))
 
-from app.engine.clinical_trials import (  # noqa: E402
+from app.engine.clinical_trials import (
     is_clinical_trial_text_relevant,
 )
 

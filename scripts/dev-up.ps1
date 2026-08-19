@@ -1,7 +1,6 @@
 param(
   [int]$BackendPort = 8000,
-  [int]$FrontendPort = 8093,
-  [string]$FrontendMode = 'react'
+  [int]$FrontendPort = 8093
 )
 
 $ErrorActionPreference = "Stop"
@@ -138,34 +137,18 @@ function Prepare-LogFile([string]$Path) {
 
 $crawlerRoot = Split-Path $PSScriptRoot -Parent
 $serverDir = Join-Path $crawlerRoot "server"
-$frontendDir = Join-Path $crawlerRoot "frontend"
 $reactFrontendDir = Join-Path $crawlerRoot "web"
 $pythonWrapper = Join-Path $PSScriptRoot "pythonw.ps1"
-$frontendBuildScript = Join-Path $PSScriptRoot "frontend-build.ps1"
 $reactFrontendLog = Join-Path $crawlerRoot "frontend-react.log"
 $reactFrontendErrLog = Join-Path $crawlerRoot "frontend-react.err.log"
-$frontendBuildDir = Join-Path $frontendDir "build\web"
 $backendLog = Join-Path $crawlerRoot "backend.log"
 $backendErrLog = Join-Path $crawlerRoot "backend.err.log"
-$frontendLog = Join-Path $crawlerRoot "frontend.log"
-$frontendErrLog = Join-Path $crawlerRoot "frontend.err.log"
 
 if (!(Test-Path $pythonWrapper)) {
   throw "Missing Python wrapper: $pythonWrapper"
 }
 
-if (!(Test-Path $frontendBuildScript)) {
-  throw "Missing frontend build script: $frontendBuildScript"
-}
-
-$useFlutterFrontend = $FrontendMode.ToLowerInvariant() -eq "flutter"
-$useReactFrontend = $FrontendMode.ToLowerInvariant() -eq "react"
-
-if (-not $useFlutterFrontend -and -not $useReactFrontend) {
-  throw "Invalid FrontendMode '$FrontendMode'. Supported values: flutter, react"
-}
-
-if ($useReactFrontend -and !(Test-Path $reactFrontendDir)) {
+if (!(Test-Path $reactFrontendDir)) {
   throw "Missing React frontend directory: $reactFrontendDir"
 }
 
@@ -183,25 +166,6 @@ Write-Host "Restarting backend while keeping the current frontend available..."
 Stop-PortProcesses -Port $BackendPort
 Assert-PortFree -Port $BackendPort
 
-if ($useFlutterFrontend) {
-  if (!(Test-Path $frontendBuildScript)) {
-    throw "Missing frontend build script: $frontendBuildScript"
-  }
-
-  Write-Host "Building stable flutter web assets..."
-  & powershell -NoProfile -ExecutionPolicy Bypass -File $frontendBuildScript -ApiBaseUrl $frontendApiBaseUrl
-  if ($LASTEXITCODE -ne 0) {
-    throw "Frontend build failed with exit code $LASTEXITCODE."
-  }
-}
-
-if ($useFlutterFrontend) {
-  $frontendIndex = Join-Path $frontendBuildDir "index.html"
-  if (!(Test-Path $frontendIndex)) {
-    throw "Flutter build completed without creating $frontendIndex"
-  }
-}
-
 $backendLog = Prepare-LogFile -Path $backendLog
 $backendErrLog = Prepare-LogFile -Path $backendErrLog
 
@@ -218,22 +182,12 @@ try {
   Write-Host "Backend is healthy. Switching frontend..."
   Stop-PortProcesses -Port $FrontendPort
   Assert-PortFree -Port $FrontendPort
-  if ($useFlutterFrontend) {
-    $frontendLog = Prepare-LogFile -Path $frontendLog
-    $frontendErrLog = Prepare-LogFile -Path $frontendErrLog
-  } else {
-    $reactFrontendLog = Prepare-LogFile -Path $reactFrontendLog
-    $reactFrontendErrLog = Prepare-LogFile -Path $reactFrontendErrLog
-  }
+  $reactFrontendLog = Prepare-LogFile -Path $reactFrontendLog
+  $reactFrontendErrLog = Prepare-LogFile -Path $reactFrontendErrLog
 
-  Write-Host "Starting frontend ($FrontendMode) on http://127.0.0.1:$FrontendPort ..."
-  if ($useFlutterFrontend) {
-    $frontendCommand = "Set-Location '$frontendDir'; & '$pythonWrapper' -m http.server $FrontendPort --bind 127.0.0.1 --directory '$frontendBuildDir'"
-    $frontendProc = Start-Process -FilePath "powershell" -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $frontendCommand) -WindowStyle Hidden -PassThru -RedirectStandardOutput $frontendLog -RedirectStandardError $frontendErrLog
-  } else {
-    $reactCommand = "Set-Location '$reactFrontendDir'; `$env:API_BASE_URL = '$frontendApiBaseUrl'; npm run dev -- --host 0.0.0.0 --port $FrontendPort"
-    $frontendProc = Start-Process -FilePath "powershell" -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $reactCommand) -WindowStyle Hidden -PassThru -RedirectStandardOutput $reactFrontendLog -RedirectStandardError $reactFrontendErrLog
-  }
+  Write-Host "Starting React frontend on http://127.0.0.1:$FrontendPort ..."
+  $reactCommand = "Set-Location '$reactFrontendDir'; `$env:API_BASE_URL = '$frontendApiBaseUrl'; npm run dev -- --host 0.0.0.0 --port $FrontendPort"
+  $frontendProc = Start-Process -FilePath "powershell" -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $reactCommand) -WindowStyle Hidden -PassThru -RedirectStandardOutput $reactFrontendLog -RedirectStandardError $reactFrontendErrLog
 
   Wait-ForHttpOk -Url "http://127.0.0.1:$FrontendPort/" -TimeoutSeconds 60
 
@@ -242,22 +196,15 @@ try {
   Write-Host "Frontend PID: $($frontendProc.Id)"
   Write-Host "Backend URL:  http://127.0.0.1:$BackendPort"
   Write-Host "Frontend URL: http://127.0.0.1:$FrontendPort"
-  if ($useReactFrontend) {
-    $lanAddress = Get-LanIPv4Address
-    if ([string]::IsNullOrWhiteSpace($lanAddress)) {
-      Write-Host "LAN URL:      unavailable (open http://<this-computer-ip>:$FrontendPort)"
-    } else {
-      Write-Host "LAN URL:      http://${lanAddress}:$FrontendPort"
-    }
+  $lanAddress = Get-LanIPv4Address
+  if ([string]::IsNullOrWhiteSpace($lanAddress)) {
+    Write-Host "LAN URL:      unavailable (open http://<this-computer-ip>:$FrontendPort)"
+  } else {
+    Write-Host "LAN URL:      http://${lanAddress}:$FrontendPort"
   }
   Write-Host "Frontend API: $frontendApiBaseUrl"
-  Write-Host "Frontend Mode: $FrontendMode"
   Write-Host "Backend Log:  $backendLog"
-  if ($useFlutterFrontend) {
-    Write-Host "Frontend Log: $frontendLog"
-  } else {
-    Write-Host "Frontend Log: $reactFrontendLog"
-  }
+  Write-Host "Frontend Log: $reactFrontendLog"
 } catch {
   Write-Warning "Combined startup failed: $($_.Exception.Message)"
   Stop-LaunchedProcess -Process $frontendProc
@@ -268,7 +215,7 @@ try {
   }
   Write-LogTail -Label "Backend error log" -Path $backendErrLog
   Write-LogTail -Label "Backend output log" -Path $backendLog
-  Write-LogTail -Label "Frontend error log" -Path $(if ($useFlutterFrontend) { $frontendErrLog } else { $reactFrontendErrLog })
-  Write-LogTail -Label "Frontend output log" -Path $(if ($useFlutterFrontend) { $frontendLog } else { $reactFrontendLog })
+  Write-LogTail -Label "Frontend error log" -Path $reactFrontendErrLog
+  Write-LogTail -Label "Frontend output log" -Path $reactFrontendLog
   throw
 }

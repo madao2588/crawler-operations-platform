@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent, KeyboardEvent, MouseEvent } from 'react'
-import { MoreHorizontal, Play, Plus, RefreshCw } from 'lucide-react'
+import { Play, Plus } from 'lucide-react'
 import { ApiError } from '../../api/client'
 import { useAppLocation } from '../../app/router'
 import { useAuth } from '../../auth/AuthProvider'
@@ -119,8 +119,6 @@ export function SystemManagementPage({
   const [runningTaskIds, setRunningTaskIds] = useState<number[]>([])
   const [bulkRunning, setBulkRunning] = useState(false)
   const [logsRefreshing, setLogsRefreshing] = useState(false)
-  const [taskTogglingIds, setTaskTogglingIds] = useState<number[]>([])
-  const [deletingTaskIds, setDeletingTaskIds] = useState<number[]>([])
   const [templateBusyIds, setTemplateBusyIds] = useState<string[]>([])
 
   const openedInitialTaskRef = useRef<number | null>(null)
@@ -314,57 +312,6 @@ export function SystemManagementPage({
     }
   }
 
-  async function handleToggleTask(task: TaskListItem) {
-    if (!canManage || taskTogglingIds.includes(task.id)) return
-    setTaskTogglingIds((current) => [...current, task.id])
-    try {
-      await taskRepo.updateTask(task.id, { status: task.status === 1 ? 0 : 1 })
-      setFeedback({ tone: 'success', message: task.status === 1 ? '任务已停用。' : '任务已启用。' })
-      await refreshTasks()
-    } catch (error) {
-      setFeedback({ tone: 'error', message: `更新任务失败：${toMessage(error)}` })
-    } finally {
-      setTaskTogglingIds((current) => current.filter((item) => item !== task.id))
-    }
-  }
-
-  async function handleDeleteTask(task: TaskListItem) {
-    if (!canManage || deletingTaskIds.includes(task.id)) return
-    if (!window.confirm(`确认删除“${task.name}”吗？`)) return
-    setDeletingTaskIds((current) => [...current, task.id])
-    try {
-      await taskRepo.deleteTask(task.id)
-      setFeedback({ tone: 'success', message: '任务已删除。' })
-      await refreshTasks()
-      if (selectedTask?.id === task.id) setSelectedTask(null)
-    } catch (error) {
-      setFeedback({ tone: 'error', message: `删除任务失败：${toMessage(error)}` })
-    } finally {
-      setDeletingTaskIds((current) => current.filter((item) => item !== task.id))
-    }
-  }
-
-  async function handleSaveAsTemplate(task: TaskListItem) {
-    if (!canManage) return
-    const input: TaskTemplateInput = {
-      label: `${task.name} 模板`,
-      name: task.name,
-      start_url: task.start_url,
-      cron_expr: task.cron_expr,
-      parser_rules: task.parser_rules,
-      enabled: task.status === 1,
-      description: `基于任务“${task.name}”创建的模板`,
-      tags: ['任务模板'],
-    }
-    try {
-      await templateRepo.createTaskTemplate(input)
-      setFeedback({ tone: 'success', message: `已根据“${task.name}”生成模板。` })
-      await refreshTemplates()
-    } catch (error) {
-      setFeedback({ tone: 'error', message: `保存模板失败：${toMessage(error)}` })
-    }
-  }
-
   async function handleUseTemplate(templateItem: TaskTemplate) {
     if (!canManage || templateBusyIds.includes(templateItem.id)) return
     setTemplateBusyIds((current) => [...current, templateItem.id])
@@ -373,24 +320,6 @@ export function SystemManagementPage({
       setTaskEditor({ mode: 'create', template: tracked })
     } catch (error) {
       setFeedback({ tone: 'error', message: `使用模板失败：${toMessage(error)}` })
-    } finally {
-      setTemplateBusyIds((current) => current.filter((item) => item !== templateItem.id))
-    }
-  }
-
-  async function handleManualCollect(templateItem: TaskTemplate) {
-    if (!canManage || templateBusyIds.includes(templateItem.id)) return
-    const url = window.prompt('输入需要登记的文章链接', templateItem.start_url)
-    if (!url?.trim()) return
-    setTemplateBusyIds((current) => [...current, templateItem.id])
-    try {
-      const result = await templateRepo.collectManualSource(templateItem.id, url.trim())
-      setFeedback({
-        tone: 'success',
-        message: `文章已登记，公告 ID ${result.notice_id}，状态 ${result.status}。`,
-      })
-    } catch (error) {
-      setFeedback({ tone: 'error', message: `登记文章失败：${toMessage(error)}` })
     } finally {
       setTemplateBusyIds((current) => current.filter((item) => item !== templateItem.id))
     }
@@ -477,7 +406,7 @@ export function SystemManagementPage({
   return (
     <section className="system-page">
       <PageToolbar
-        title="运行与故障处理"
+        title="自动采集"
         actions={canManage ? (
           <div className="system-hero-actions">
           <button
@@ -487,7 +416,7 @@ export function SystemManagementPage({
             onClick={handleBulkRun}
           >
             <Play aria-hidden="true" />
-            {bulkRunning ? '采集中' : '一键采集'}
+            {bulkRunning ? '正在刷新' : '立即刷新全部'}
           </button>
           </div>
         ) : undefined}
@@ -498,7 +427,7 @@ export function SystemManagementPage({
           {feedback.message}
         </p>
       ) : null}
-      {!canManage ? <p className="read-only-banner">普通用户为只读模式，可查看任务、模板和日志，运行或配置修改请联系管理员。</p> : null}
+      {!canManage ? <p className="read-only-banner">系统会按计划自动采集；普通用户可查看运行状态和日志。</p> : null}
 
       <nav className="system-tabs" aria-label="系统管理分区">
         <button
@@ -506,7 +435,7 @@ export function SystemManagementPage({
           type="button"
           onClick={() => setTab('tasks')}
         >
-          任务调度
+          采集状态
         </button>
         <button
           className={tab === 'templates' ? 'tab-button is-active' : 'tab-button'}
@@ -536,23 +465,10 @@ export function SystemManagementPage({
       {tab === 'tasks' ? (
         <section className="panel">
             <div className="panel-header">
-              <h2>任务调度</h2>
-              {canManage ? <div className="panel-actions">
-                <button
-                  className="secondary-action system-icon-action"
-                  type="button"
-                  aria-label="刷新全部启用任务"
-                  title="刷新全部启用任务"
-                  disabled={bulkRunning}
-                  onClick={handleBulkRun}
-                >
-                  <RefreshCw aria-hidden="true" />
-                </button>
-                <button className="secondary-action" type="button" onClick={() => setTaskEditor({ mode: 'create' })}>
-                  <Plus aria-hidden="true" />
-                  新建任务
-                </button>
-              </div> : null}
+              <div>
+                <h2>来源运行状态</h2>
+                <p>固定来源会按上海时间自动运行；失败后每 15 分钟检查一次，到达退避时间就自动重试，无需逐个点击。</p>
+              </div>
             </div>
             <TaskMetricGrid summary={taskSummary} activeFilter={taskFilter} onSelect={setTaskFilter} />
 
@@ -603,18 +519,14 @@ export function SystemManagementPage({
                     <thead>
                       <tr>
                         <th>任务</th>
-                        <th>Cron</th>
+                        <th>自动计划</th>
                         <th>状态</th>
                         <th>最近运行</th>
                         <th>最近结果</th>
-                        {canManage ? <th>操作</th> : null}
                       </tr>
                     </thead>
                     <tbody>
                       {tasksPage.items.map((item) => {
-                        const taskBusy = runningTaskIds.includes(item.id)
-                        const toggling = taskTogglingIds.includes(item.id)
-                        const deleting = deletingTaskIds.includes(item.id)
                         return (
                           <tr
                             key={item.id}
@@ -629,45 +541,14 @@ export function SystemManagementPage({
                               </button>
                               <div className="row-meta">{item.start_url}</div>
                             </td>
-                            <td>{item.cron_expr}</td>
+                            <td>{formatCronSchedule(item.cron_expr)}</td>
                             <td>
                               <span className={item.status === 1 ? 'status-badge is-success' : 'status-badge'}>
-                                {item.status === 1 ? '已启用' : '已停用'}
+                                {item.status === 1 ? '自动运行' : '未自动采集'}
                               </span>
                             </td>
                             <td>{formatDateTime(item.last_run_at)}</td>
                             <td>{describeTaskResult(item.last_run_status, item.last_error_message)}</td>
-                            {canManage ? <td>
-                              <div className="row-actions" onClick={stopPropagation}>
-                                <button
-                                  className="primary-inline-action"
-                                  type="button"
-                                  disabled={taskBusy}
-                                  onClick={() => void handleTaskRun(item.id)}
-                                >
-                                  {taskBusy ? '提交中' : '立即运行'}
-                                </button>
-                                <details className="row-more">
-                                  <summary aria-label={`更多任务操作 ${item.name}`}>
-                                    <MoreHorizontal aria-hidden="true" />
-                                  </summary>
-                                  <div className="row-more-menu">
-                                    <button className="ghost-action" type="button" disabled={toggling} onClick={() => void handleToggleTask(item)}>
-                                      {toggling ? '处理中' : item.status === 1 ? '停用' : '启用'}
-                                    </button>
-                                    <button className="ghost-action" type="button" onClick={() => setTaskEditor({ mode: 'edit', task: item })}>
-                                      编辑
-                                    </button>
-                                    <button className="ghost-action" type="button" onClick={() => void handleSaveAsTemplate(item)}>
-                                      另存模板
-                                    </button>
-                                    <button className="ghost-action is-danger" type="button" disabled={deleting} onClick={() => void handleDeleteTask(item)}>
-                                      {deleting ? '删除中' : '删除'}
-                                    </button>
-                                  </div>
-                                </details>
-                              </div>
-                            </td> : null}
                           </tr>
                         )
                       })}
@@ -757,9 +638,6 @@ export function SystemManagementPage({
                       {canManage ? <div className="row-actions" onClick={stopPropagation}>
                         <button className="primary-inline-action" type="button" disabled={busy} onClick={() => void handleUseTemplate(item)}>
                           {busy ? '处理中' : '使用模板'}
-                        </button>
-                        <button className="ghost-action" type="button" disabled={busy} onClick={() => void handleManualCollect(item)}>
-                          登记文章
                         </button>
                         <button className="ghost-action" type="button" onClick={() => setTemplateEditor({ mode: 'edit', template: item })}>
                           编辑
@@ -878,6 +756,7 @@ export function SystemManagementPage({
           loading={detailLoading}
           error={detailError}
           canManage={canManage}
+          running={runningTaskIds.includes(selectedTask.id)}
           onClose={() => setSelectedTask(null)}
           onEdit={() => setTaskEditor({ mode: 'edit', task: selectedTask })}
           onRun={() => void handleTaskRun(selectedTask.id)}
@@ -953,8 +832,8 @@ function TaskMetricGrid({
 }) {
   const cards: Array<{ key: TaskFilter; title: string; value: number }> = [
     { key: 'all', title: '全部任务', value: summary.total },
-    { key: 'enabled', title: '已启用', value: summary.enabled },
-    { key: 'disabled', title: '已停用', value: summary.disabled },
+    { key: 'enabled', title: '自动运行', value: summary.enabled },
+    { key: 'disabled', title: '未自动采集', value: summary.disabled },
     { key: 'failed', title: '失败任务', value: summary.failed },
     { key: 'active', title: '运行中', value: summary.active },
   ]
@@ -1018,6 +897,7 @@ function TaskDetailDialog({
   loading,
   error,
   canManage,
+  running,
   onClose,
   onEdit,
   onRun,
@@ -1027,6 +907,7 @@ function TaskDetailDialog({
   loading: boolean
   error: string | null
   canManage: boolean
+  running: boolean
   onClose: () => void
   onEdit: () => void
   onRun: () => void
@@ -1040,16 +921,6 @@ function TaskDetailDialog({
             <p>{task.name}</p>
           </div>
           <div className="row-actions">
-            {canManage ? (
-              <>
-                <button className="ghost-action" type="button" onClick={onEdit}>
-                  编辑
-                </button>
-                <button className="primary-inline-action" type="button" onClick={onRun}>
-                  立即运行
-                </button>
-              </>
-            ) : null}
             <button className="ghost-action" type="button" onClick={onClose}>
               关闭
             </button>
@@ -1057,8 +928,8 @@ function TaskDetailDialog({
         </div>
         <div className="detail-grid">
           <DetailCard label="开始地址" value={task.start_url} />
-          <DetailCard label="Cron" value={task.cron_expr} />
-          <DetailCard label="状态" value={task.status === 1 ? '已启用' : '已停用'} />
+          <DetailCard label="自动计划" value={formatCronSchedule(task.cron_expr)} />
+          <DetailCard label="状态" value={task.status === 1 ? '自动运行' : '未自动采集'} />
           <DetailCard label="最近运行" value={formatDateTime(task.last_run_at)} />
           <DetailCard label="最近成功" value={formatDateTime(task.last_success_at)} />
           <DetailCard label="最近结果" value={describeTaskResult(task.last_run_status, task.last_error_message)} />
@@ -1084,6 +955,20 @@ function TaskDetailDialog({
             </ul>
           ) : null}
         </section>
+        {canManage ? (
+          <details className="detail-maintenance">
+            <summary>高级维护</summary>
+            <p>自动计划异常或来源配置需要调整时再使用，日常无需操作。</p>
+            <div className="row-actions">
+              <button className="ghost-action" type="button" onClick={onEdit}>
+                编辑配置
+              </button>
+              <button className="ghost-action" type="button" disabled={running} onClick={onRun}>
+                {running ? '提交中' : '仅重跑此来源'}
+              </button>
+            </div>
+          </details>
+        ) : null}
       </div>
     </div>
   )
@@ -1411,6 +1296,25 @@ function formatDateTime(value: string | null) {
     hour: '2-digit',
     minute: '2-digit',
   }).format(date)
+}
+
+function formatCronSchedule(value: string) {
+  const fields = value.trim().split(/\s+/)
+  if (fields.length !== 5) return value
+  const [minute, hour, dayOfMonth, month, dayOfWeek] = fields
+  if (dayOfMonth !== '*' || month !== '*' || dayOfWeek !== '*') return value
+  if (minute === '0' && hour.startsWith('*/')) {
+    const interval = Number(hour.slice(2))
+    if (Number.isInteger(interval) && interval > 0) return `每 ${interval} 小时`
+  }
+  if (/^\d+$/.test(minute) && /^\d+(,\d+)*$/.test(hour)) {
+    const times = hour
+      .split(',')
+      .map((item) => `${item.padStart(2, '0')}:${minute.padStart(2, '0')}`)
+      .join('、')
+    return `每天 ${times}`
+  }
+  return value
 }
 
 function uniqueTags(items: TaskTemplate[]) {

@@ -13,6 +13,7 @@ export interface DashboardRuntime {
   database: string
   scheduler: string
   scheduledJobs: number
+  releaseVersion: string
 }
 
 export interface DashboardCollectionHealth {

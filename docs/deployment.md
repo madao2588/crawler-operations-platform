@@ -7,8 +7,6 @@
 - 后端独立部署为 FastAPI API 服务
 - 前端独立构建为 React 静态站点
 
-不要把 Flutter 前端构建链耦合进后端容器启动流程。Flutter 仍然可以作为显式回退入口，但不是默认部署目标。
-
 ## 1. 准备环境变量
 
 先从仓库根目录复制示例配置：
@@ -91,5 +89,3 @@ $env:VITE_API_BASE_URL = "https://api.example.com"
 
 - `docker compose` 不构建也不托管前端。
 - 前端域名变化时，后端 CORS 配置也要同步更新。
-- 如果本机 Flutter 只能读不能写，本地回退构建请继续使用 `scripts\flutterw.ps1`。
-- 需要回退验证时，使用 `npm run start:flutter`，不要把 Flutter 当成默认上线链路。

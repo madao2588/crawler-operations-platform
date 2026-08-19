@@ -10,9 +10,9 @@ SERVER_DIR = REPO_ROOT / "server"
 if str(SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(SERVER_DIR))
 
-from app.core.database import AsyncSessionLocal  # noqa: E402
-from app.repositories.template_repo import TemplateRepository  # noqa: E402
-from app.services.template_service import (  # noqa: E402
+from app.core.database import AsyncSessionLocal
+from app.repositories.template_repo import TemplateRepository
+from app.services.template_service import (
     NEW_DRUG_SOURCE_TEMPLATES,
     TemplateService,
 )

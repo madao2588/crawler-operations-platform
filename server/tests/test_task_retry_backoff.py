@@ -76,6 +76,78 @@ async def test_catch_up_stale_tasks_defers_recent_failed_sources_in_backoff_wind
     assert result.deferred_tasks[0].next_retry_at == fixed_now + timedelta(minutes=10)
 
 
+@pytest.mark.asyncio
+async def test_periodic_retry_queues_due_failures_without_waiting_for_next_cron() -> None:
+    fixed_now = datetime(2026, 8, 17, 10, 0, tzinfo=UTC)
+    failed_tasks = [
+        SimpleNamespace(
+            id=21,
+            name="Recent network failure",
+            last_run_status="failed",
+            last_run_at=fixed_now - timedelta(minutes=20),
+            last_error_message="net::ERR_CONNECTION_CLOSED",
+        ),
+        SimpleNamespace(
+            id=22,
+            name="Due network failure",
+            last_run_status="failed",
+            last_run_at=fixed_now - timedelta(hours=2),
+            last_error_message="net::ERR_CONNECTION_CLOSED",
+        ),
+        SimpleNamespace(
+            id=23,
+            name="Recent partial failure",
+            last_run_status="partial",
+            last_run_at=fixed_now - timedelta(minutes=20),
+            last_error_message="列表跟进本次有 1 条处理失败；最近原因：请求超时。",
+        ),
+        SimpleNamespace(
+            id=24,
+            name="Due partial failure",
+            last_run_status="partial",
+            last_run_at=fixed_now - timedelta(hours=2),
+            last_error_message="列表跟进本次有 1 条处理失败；最近原因：请求超时。",
+        ),
+    ]
+
+    class FakeTaskRepository:
+        async def list_retryable_enabled(self):
+            return failed_tasks
+
+    class FakeCrawlService:
+        def __init__(self) -> None:
+            self.calls: list[int] = []
+
+        async def trigger_now(self, task_id: int) -> TaskRunPayload:
+            self.calls.append(task_id)
+            return TaskRunPayload(task_id=task_id, status="queued", recovered_stale_run=False)
+
+    class FakeLogRepository:
+        def __init__(self) -> None:
+            self.messages: list[str] = []
+
+        async def create(self, **kwargs) -> None:
+            self.messages.append(str(kwargs["message"]))
+
+    crawl_service = FakeCrawlService()
+    log_repo = FakeLogRepository()
+    service = TaskService(
+        task_repo=FakeTaskRepository(),  # type: ignore[arg-type]
+        log_repo=log_repo,  # type: ignore[arg-type]
+        crawl_service=crawl_service,  # type: ignore[arg-type]
+        scheduler=SimpleNamespace(),  # type: ignore[arg-type]
+    )
+
+    result = await service.retry_due_failed_tasks(now=fixed_now)
+
+    assert crawl_service.calls == [22, 24]
+    assert result.queued_task_ids == [22, 24]
+    assert [item.task_id for item in result.deferred_tasks] == [21, 23]
+    assert log_repo.messages == [
+        "automatic retry sweep: queued=2 skipped=0 deferred=2 errors=0"
+    ]
+
+
 def test_post_run_enabled_defers_recent_failed_task_with_retry_metadata(
     asgi_test_client: TestClient,
     auth_headers: dict[str, str],

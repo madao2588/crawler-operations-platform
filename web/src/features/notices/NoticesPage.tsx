@@ -1201,7 +1201,7 @@ function MonthFilterBar(props: {
         type="button"
         className={`today-keyword-chip ${props.todayKeywordHitActive ? 'is-active' : ''}`}
         aria-pressed={props.todayKeywordHitActive}
-        title="按网站发布日期筛选；缺少发布日期时按采集日期"
+        title="仅按网站发布日期筛选；缺少发布日期的数据不计入今日发布"
         onClick={props.onToggleTodayKeywordHit}
       >
         <CalendarCheck2 aria-hidden="true" />
@@ -1211,7 +1211,7 @@ function MonthFilterBar(props: {
         type="button"
         className={`today-keyword-chip business-week-chip ${props.businessWeekActive ? 'is-active' : ''}`}
         aria-pressed={props.businessWeekActive}
-        title="本周一至今天；优先按网站发布日期，缺少时按采集日期"
+        title="本周一至今天，仅按网站发布日期筛选"
         onClick={props.onToggleBusinessWeek}
       >
         <CalendarRange aria-hidden="true" />

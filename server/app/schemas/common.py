@@ -20,6 +20,7 @@ class HealthPayload(BaseModel):
 
     status: str
     app_name: str
+    release_version: str = "dev"
     database: str = "unknown"
     scheduler: str = "unknown"
     scheduled_jobs: int = Field(default=0, ge=0)

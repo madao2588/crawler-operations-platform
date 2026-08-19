@@ -1,6 +1,6 @@
 ﻿# Crawler System
 
-Crawler System 是面向运营场景的采集平台。后端使用 FastAPI，默认前端使用 React。Flutter 仅保留为显式回退入口，不再作为 `npm start` 的默认模式。
+Crawler System 是面向运营场景的采集平台。后端使用 FastAPI，前端使用 React。
 
 说明：仓库根目录的 `npm start` 会转发到 `crawler_system`，最终启动行为与下表一致。
 
@@ -9,10 +9,7 @@ Crawler System 是面向运营场景的采集平台。后端使用 FastAPI，默
 | 命令 | 作用 | 端口 |
 | --- | --- | --- |
 | `npm start` | 启动 FastAPI + React | 后端 `8000` / 前端 `8093` |
-| `npm run start:react` | 显式启动 React 组合 | 后端 `8000` / 前端 `8093` |
-| `npm run start:flutter` | 启动 FastAPI + Flutter 回退组合 | 后端 `8000` / 前端 `8093` |
 | `npm stop` | 停止当前组合 | - |
-| `npm run stop:flutter` | 停止 Flutter 回退组合 | - |
 
 ## 当前功能
 
@@ -62,16 +59,6 @@ npm stop
 - React 前端 `typecheck`
 - React 前端 `test`
 - React 前端 `build`
-- Flutter `analyze`
-- Flutter `test`
-
-## 前端模式切换
-
-- 默认模式：`npm start`
-- 显式 React：`npm run start:react`
-- 显式 Flutter 回退：`npm run start:flutter`
-- 停止当前组合：`npm stop`
-- 停止 Flutter 回退：`npm run stop:flutter`
 
 ## 关键环境变量
 
@@ -82,29 +69,29 @@ npm stop
 - `CRAWLER_OUTBOUND_PROXY_URL`
 - `CRAWLER_USE_SYSTEM_PROXY`
 - `CRAWLER_OUTBOUND_NO_PROXY`
+- `CRAWLER_AUTOMATIC_RETRY_MINUTES`
 - `VITE_API_BASE_URL`
 - `API_BASE_URL`
-- `CRAWLER_FLUTTER_ROOT`
 
 说明：
 
 - React 默认通过同源代理访问 `/v1/*` 和 `/health`，本地联调通常不需要额外配置 `VITE_API_BASE_URL`。
 - 如果要把 React 静态包部署到独立域名，而 API 在另一个域名上，请在构建时设置 `VITE_API_BASE_URL`。
-- `API_BASE_URL` 仅供 Flutter 回退构建脚本使用。
-- Windows 默认代理、TUN 或 Fake-IP 场景下，爬虫和 Playwright 可能会继承系统代理；需要显式直连时，请同步设置 `CRAWLER_OUTBOUND_PROXY_URL`、`CRAWLER_USE_SYSTEM_PROXY` 和 `CRAWLER_OUTBOUND_NO_PROXY`。
-- 需求 1 的 7 个政府来源已纳入默认直连列表。若使用 Clash/Vortex 一类 TUN 代理，运行模式必须是 `rule`，并确保这些域名命中 `DIRECT`；`global` 模式会忽略域名直连规则，导致站点看似全部不可用。
+- `API_BASE_URL` 可用于本地联合启动时显式指定后端地址。
+- Windows 离线部署入口会自动读取当前系统代理；当代理监听在 `127.0.0.1` 时，会转换成容器可访问的 `host.docker.internal`。下载器会在全局代理和直连之间自动回退，任务级显式代理除外。
+- `CRAWLER_OUTBOUND_NO_PROXY` 默认只包含本机地址。若公司有内网域名需要直连，可以追加；不要把需要 VPN/代理才能访问的目标网站加入该列表。
+- 失败来源每 15 分钟检查一次，到达错误退避时间后自动重试，不需要逐项点击。代理和直连都失败时，仍需由 IT 修复服务器的 VPN、代理或外网白名单。
 
 ## 固定需求来源状态
 
-- 需求 1：7 个政府站点自动采集；2 个公众号不纳入自动采集验收，由使用人员自行查询，现有文章链接登记仅作为可选辅助入口。
+- 需求 1：7 个政府站点自动采集，分别保留站点级状态、错误原因和重试记录。
 - 需求 2：丁香会议、中国药学会、生物谷、CPHI 覆盖会议列表与详情；生物谷来源可能触发验证码，默认不做绕过。
-- 需求 3：PubMed 通过 NCBI 官方接口自动采集；摩熵医药需要合法授权账号或授权导出；公众号竞品线索由使用人员自行查询，可选使用人工链接登记。
+- 需求 3：PubMed 通过 NCBI 官方接口自动采集；摩熵医药需要合法授权账号或授权导出。
 
 ## 本地开发说明
 
-系统 Flutter SDK 在这台机器上是只读安装，不能直接稳定执行 `flutter`。仓库内置了 wrapper：
+仓库内置统一的本地启动与校验脚本：
 
-- [scripts/flutterw.ps1](scripts/flutterw.ps1)
 - [scripts/dev-up.ps1](scripts/dev-up.ps1)
 - [scripts/dev-check.ps1](scripts/dev-check.ps1)
 
@@ -120,7 +107,7 @@ npm stop
 npm run release:intranet
 ```
 
-产物位于 `artifacts/intranet-package/`。目标机解压后依次执行 `verify.ps1`、`deploy.ps1`；首次安装程序依赖无需联网，采集外部网站仍需要受控的互联网出口。升级时覆盖程序文件并运行 `upgrade.ps1`，已有 `.env.production` 和 `runtime` 不会被覆盖。
+产物位于 `artifacts/intranet-package/`。Docker 镜像在开发/打包机上构建并随 ZIP 交付；目标 Windows 电脑解压到最终位置后只需双击一次 `START-HERE.cmd`，启动器会自动启动 Docker、校验并部署、登记当前用户登录后自动启动，并打开网页。根目录只展示入口、说明和首登凭据，程序与运行数据集中在 `_system`。部署阶段禁止重新构建和联网拉取镜像。首次安装程序依赖无需联网，正式运行时采集外部网站仍需要受控的互联网出口。固定来源随服务自动恢复并按上海时间采集，日常不需逐项启用；升级时由 IT 运行 `_system/upgrade.ps1`，已有活动配置和运行数据不会被覆盖。
 
 部署说明见：
 
@@ -134,7 +121,6 @@ npm run release:intranet
 crawler_system/
 |-- server/
 |-- web/
-|-- frontend/
 |-- scripts/
 |-- docs/
 |-- docker-compose.yml

@@ -12,12 +12,12 @@ SERVER_DIR = REPO_ROOT / "server"
 if str(SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(SERVER_DIR))
 
-from app.engine.clinical_trials import (  # noqa: E402
+from app.engine.clinical_trials import (
     ClinicalTrialsGovClient,
     is_study_relevant_to_topic,
 )
-from app.engine.pubmed import PubMedClient  # noqa: E402
-from app.services.template_service import NEW_DRUG_SOURCE_TEMPLATES  # noqa: E402
+from app.engine.pubmed import PubMedClient
+from app.services.template_service import NEW_DRUG_SOURCE_TEMPLATES
 
 
 def _rules_for(template_id: str, crawl_mode: str) -> dict[str, Any]:

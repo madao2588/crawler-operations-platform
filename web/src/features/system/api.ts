@@ -1,7 +1,6 @@
 import { ApiClient } from '../../api/client'
 import type {
   LogSummary,
-  ManualCollectionResult,
   PageData,
   RunAllEnabledResult,
   TaskDetail,
@@ -72,8 +71,6 @@ export function createTemplateRepository(client: ApiClient): TemplateRepository 
     },
     trackTaskTemplateUse: async (templateId) =>
       client.post<TaskTemplate>(`/v1/templates/tasks/${templateId}/use`),
-    collectManualSource: async (templateId, url) =>
-      client.post<ManualCollectionResult>(`/v1/templates/tasks/${templateId}/collect`, { url }),
   }
 }
 

@@ -6,7 +6,7 @@ import secrets
 import sqlite3
 import string
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -73,7 +73,7 @@ def rotate_admin_connection(
 
 
 def backup_database(database_path: Path) -> Path:
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     backup_path = database_path.with_name(
         f"{database_path.stem}.before-admin-rotation.{timestamp}{database_path.suffix}"
     )

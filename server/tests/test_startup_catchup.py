@@ -4,9 +4,38 @@ from types import SimpleNamespace
 import pytest
 
 import app.core.lifecycle as lifecycle
+from app.core.lifecycle import schedule_collection_retries
 from app.schemas.task import TaskRunPayload
+from app.core.scheduler import get_scheduler
 from app.services.crawl_service import TaskRunConflictError
 from app.services.task_service import TaskService
+
+
+def test_collection_scheduler_uses_shanghai_business_time() -> None:
+    assert str(get_scheduler().timezone) == "Asia/Shanghai"
+
+
+def test_failed_collection_retry_sweep_runs_automatically_every_fifteen_minutes(
+    monkeypatch,
+) -> None:
+    calls: list[tuple[object, str, dict[str, object]]] = []
+
+    class FakeScheduler:
+        def add_job(self, function, trigger, **kwargs) -> None:  # noqa: ANN001
+            calls.append((function, trigger, kwargs))
+
+    monkeypatch.setattr(lifecycle.settings, "automatic_retry_minutes", 15)
+
+    schedule_collection_retries(FakeScheduler())  # type: ignore[arg-type]
+
+    assert len(calls) == 1
+    function, trigger, kwargs = calls[0]
+    assert function is lifecycle.run_due_collection_retries
+    assert trigger == "interval"
+    assert kwargs["minutes"] == 15
+    assert kwargs["id"] == "collection-retry-sweep"
+    assert kwargs["coalesce"] is True
+    assert kwargs["max_instances"] == 1
 
 
 @pytest.mark.asyncio

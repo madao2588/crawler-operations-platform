@@ -15,6 +15,7 @@ def test_health_and_tasks_list_smoke(
     assert payload["data"]["status"] in ("ok", "degraded")
     assert payload["data"]["database"] in ("ok", "error")
     assert payload["data"]["scheduler"] in ("running", "stopped")
+    assert payload["data"]["release_version"]
 
     tasks = client.get(
         "/v1/tasks",

@@ -62,14 +62,3 @@ class TestTemplateResponse(BaseModel):
     quality_score: int | None = None
     error: str | None = None
     trace: TemplateTestTrace | None = None
-
-
-class ManualCollectionRequest(BaseModel):
-    url: str = Field(..., min_length=1, max_length=2048)
-
-
-class ManualCollectionRead(BaseModel):
-    source_id: str
-    source_url: str
-    status: str
-    notice_id: int

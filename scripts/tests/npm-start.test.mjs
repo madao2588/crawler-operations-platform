@@ -9,6 +9,7 @@ const repositoryRoot = path.resolve(testDirectory, '..', '..');
 const packagePath = path.join(repositoryRoot, 'package.json');
 const workspacePackagePath = path.resolve(repositoryRoot, '..', 'package.json');
 const reactPackagePath = path.join(repositoryRoot, 'web', 'package.json');
+const reactIndexPath = path.join(repositoryRoot, 'web', 'index.html');
 const devUpPath = path.join(repositoryRoot, 'scripts', 'dev-up.ps1');
 const pythonWrapperPath = path.join(repositoryRoot, 'scripts', 'pythonw.ps1');
 const composePath = path.join(repositoryRoot, 'docker-compose.yml');
@@ -18,7 +19,9 @@ const packageBuilderPath = path.join(
   'scripts',
   'build-intranet-package.ps1',
 );
-test('npm start launches React and keeps explicit Flutter rollback commands', () => {
+const retiredFrontend = ['flut', 'ter'].join('');
+
+test('npm start exposes one FastAPI and React launch command', () => {
   assert.equal(existsSync(packagePath), true, 'root package.json must exist');
 
   const packageJson = JSON.parse(readFileSync(packagePath, 'utf8'));
@@ -31,28 +34,17 @@ test('npm start launches React and keeps explicit Flutter rollback commands', ()
     packageJson.scripts?.stop,
     'powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/dev-down.ps1',
   );
-  assert.equal(
-    packageJson.scripts?.['start:react'],
-    'powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/dev-up.ps1 -FrontendMode react',
-  );
-  assert.equal(
-    packageJson.scripts?.['start:flutter'],
-    'powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/dev-up.ps1 -FrontendMode flutter',
-  );
-  assert.equal(
-    packageJson.scripts?.['stop:flutter'],
-    'powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/dev-down.ps1',
-  );
+  assert.equal(packageJson.scripts?.['start:react'], undefined);
+  assert.equal(packageJson.scripts?.[`start:${retiredFrontend}`], undefined);
+  assert.equal(packageJson.scripts?.[`stop:${retiredFrontend}`], undefined);
 });
 
-test('combined launcher supports React mode directly', () => {
+test('combined launcher starts React directly', () => {
   const launcher = readFileSync(devUpPath, 'utf8');
 
-  assert.match(launcher, /\[string\]\$FrontendMode = 'react'/);
-  assert.match(launcher, /Supported values: flutter, react/);
-  assert.match(launcher, /\$useReactFrontend = \$FrontendMode\.ToLowerInvariant\(\) -eq "react"/);
+  assert.doesNotMatch(launcher, /FrontendMode/);
+  assert.equal(launcher.toLowerCase().includes(retiredFrontend), false);
   assert.match(launcher, /npm run dev -- --host 0\.0\.0\.0 --port \$FrontendPort/);
-  assert.match(launcher, /uvicorn main:app/);
   assert.match(launcher, /uvicorn main:app --host 127\.0\.0\.1/);
   assert.match(launcher, /Wait-ForHttpOk -Url "http:\/\/127\.0\.0\.1:\$BackendPort\/health"/);
   assert.match(launcher, /Wait-ForHttpOk -Url "http:\/\/127\.0\.0\.1:\$FrontendPort\/"/);
@@ -65,13 +57,19 @@ test('combined launcher is the single source of React host and port arguments', 
   assert.equal(packageJson.scripts?.dev, 'vite');
 });
 
+test('React document declares its favicon instead of triggering a missing default request', () => {
+  const document = readFileSync(reactIndexPath, 'utf8');
+
+  assert.match(document, /<link rel="icon" href="data:image\/svg\+xml,/);
+});
+
 test('combined launcher waits for backend health before exposing the frontend', () => {
   const launcher = readFileSync(devUpPath, 'utf8');
   const backendHealthWait = launcher.indexOf(
     'Wait-ForHttpOk -Url "http://127.0.0.1:$BackendPort/health"',
   );
   const frontendStart = launcher.indexOf(
-    'Write-Host "Starting frontend ($FrontendMode) on http://127.0.0.1:$FrontendPort ..."',
+    'Write-Host "Starting React frontend on http://127.0.0.1:$FrontendPort ..."',
   );
 
   assert.notEqual(backendHealthWait, -1, 'backend health wait must exist');
@@ -88,7 +86,7 @@ test('combined launcher keeps the current frontend available while the backend r
     'Wait-ForHttpOk -Url "http://127.0.0.1:$BackendPort/health"',
   );
   const frontendStart = launcher.indexOf(
-    'Write-Host "Starting frontend ($FrontendMode) on http://127.0.0.1:$FrontendPort ..."',
+    'Write-Host "Starting React frontend on http://127.0.0.1:$FrontendPort ..."',
   );
 
   assert.notEqual(backendHealthWait, -1, 'backend health wait must exist');
@@ -106,24 +104,14 @@ test('combined launcher keeps the current frontend available while the backend r
 });
 
 test('workspace root npm start delegates to crawler_system', () => {
-  assert.equal(
-    existsSync(workspacePackagePath),
-    true,
-    'workspace root package.json must exist',
-  );
+  assert.equal(existsSync(workspacePackagePath), true);
 
   const packageJson = JSON.parse(readFileSync(workspacePackagePath, 'utf8'));
   assert.equal(packageJson.private, true);
   assert.equal(packageJson.scripts?.start, 'npm --prefix ./crawler_system start');
   assert.equal(packageJson.scripts?.stop, 'npm --prefix ./crawler_system stop');
-  assert.equal(
-    packageJson.scripts?.['start:flutter'],
-    'npm --prefix ./crawler_system run start:flutter',
-  );
-  assert.equal(
-    packageJson.scripts?.['stop:flutter'],
-    'npm --prefix ./crawler_system run stop:flutter',
-  );
+  assert.equal(packageJson.scripts?.[`start:${retiredFrontend}`], undefined);
+  assert.equal(packageJson.scripts?.[`stop:${retiredFrontend}`], undefined);
   assert.equal(
     packageJson.scripts?.['release:intranet'],
     'npm --prefix ./crawler_system run release:intranet',
@@ -152,21 +140,19 @@ test('combined launcher avoids misleading admin and transient log warnings', () 
   assert.match(launcher, /Start-Sleep -Milliseconds 150/);
 });
 
-test('combined launcher serves a stable release build instead of the DDC debug server', () => {
+test('combined launcher uses the React development server', () => {
   const launcher = readFileSync(devUpPath, 'utf8');
 
-  assert.match(launcher, /frontend-build\.ps1/);
-  assert.match(launcher, /build\\web/);
-  assert.match(launcher, /-m http\.server/);
   assert.match(launcher, /npm run dev -- --host 0\.0\.0\.0 --port \$FrontendPort/);
-  assert.doesNotMatch(launcher, /run -d web-server/);
+  assert.doesNotMatch(launcher, /frontend-build\.ps1/);
+  assert.doesNotMatch(launcher, /-m http\.server/);
   assert.match(
     launcher,
     /Wait-ForHttpOk -Url "http:\/\/127\.0\.0\.1:\$FrontendPort\/"/,
   );
 });
 
-test('dev-check validates both React primary flow and Flutter fallback', () => {
+test('dev-check validates the React frontend', () => {
   const devCheckPath = path.join(repositoryRoot, 'scripts', 'dev-check.ps1');
   const checker = readFileSync(devCheckPath, 'utf8');
 
@@ -174,8 +160,7 @@ test('dev-check validates both React primary flow and Flutter fallback', () => {
   assert.match(checker, /npm\.cmd --prefix \$reactFrontendDir run typecheck/);
   assert.match(checker, /npm\.cmd --prefix \$reactFrontendDir test/);
   assert.match(checker, /npm\.cmd --prefix \$reactFrontendDir run build/);
-  assert.match(checker, /Running Flutter frontend analyze/);
-  assert.match(checker, /Running Flutter frontend tests/);
+  assert.equal(checker.toLowerCase().includes(retiredFrontend), false);
 });
 
 test('combined launcher cleans up partial startup and prints useful log tails', () => {

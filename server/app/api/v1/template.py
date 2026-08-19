@@ -2,14 +2,11 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.dependencies import (
     get_current_session,
-    get_task_service,
     get_template_service,
     require_admin,
 )
 from app.schemas.common import ApiResponse, EmptyPayload
 from app.schemas.template import (
-    ManualCollectionRead,
-    ManualCollectionRequest,
     TaskTemplateCreate,
     TaskTemplateRead,
     TaskTemplateUpdate,
@@ -17,7 +14,6 @@ from app.schemas.template import (
     TestTemplateResponse,
 )
 from app.services.template_service import TemplateService
-from app.services.task_service import TaskService
 from app.engine.test_pipeline import test_run
 
 router = APIRouter(
@@ -76,7 +72,6 @@ async def update_task_template(
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-
 @router.delete(
     "/tasks/{template_id}",
     response_model=ApiResponse[EmptyPayload],
@@ -106,23 +101,3 @@ async def track_task_template_use(
         return ApiResponse(data=await service.track_task_template_use(template_id))
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
-@router.post(
-    "/tasks/{template_id}/collect",
-    response_model=ApiResponse[ManualCollectionRead],
-    dependencies=[Depends(require_admin)],
-)
-async def collect_manual_source_article(
-    template_id: str,
-    payload: ManualCollectionRequest,
-    service: TaskService = Depends(get_task_service),
-) -> ApiResponse[ManualCollectionRead]:
-    try:
-        return ApiResponse(
-            data=await service.collect_manual_source(template_id, payload.url)
-        )
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc

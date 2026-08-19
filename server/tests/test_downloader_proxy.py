@@ -154,6 +154,54 @@ async def test_fetch_static_passes_resolved_proxy_to_httpx(
 
 
 @pytest.mark.asyncio
+async def test_fetch_static_automatically_falls_back_to_direct_when_global_proxy_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempted_proxies: list[object] = []
+
+    class FakeResponse:
+        text = "<html>direct ok</html>"
+
+        def raise_for_status(self) -> None:
+            return None
+
+    class FakeClient:
+        def __init__(self, **kwargs: object) -> None:
+            self.proxy = kwargs.get("proxy")
+            attempted_proxies.append(self.proxy)
+
+        async def __aenter__(self) -> "FakeClient":
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def get(self, url: str, *, cookies: object = None) -> FakeResponse:
+            _ = cookies
+            if self.proxy is not None:
+                raise httpx.ConnectError(
+                    "proxy connection failed",
+                    request=httpx.Request("GET", url),
+                )
+            return FakeResponse()
+
+    monkeypatch.setattr(
+        downloader,
+        "settings",
+        _settings(
+            outbound_proxy_url="http://host.docker.internal:7897",
+            max_retry=2,
+        ),
+    )
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+
+    html = await downloader.fetch_static("https://example.com/notices")
+
+    assert html == "<html>direct ok</html>"
+    assert attempted_proxies == ["http://host.docker.internal:7897", None]
+
+
+@pytest.mark.asyncio
 async def test_fetch_static_rejects_private_redirect_target(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

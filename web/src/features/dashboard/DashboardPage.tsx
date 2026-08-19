@@ -177,6 +177,7 @@ export function DashboardPage() {
             <strong>服务 {runtimeStatusLabel(overview.runtime.status)}</strong>
             <span>数据库 {runtimeStatusLabel(overview.runtime.database)}</span>
             <span>调度 {runtimeStatusLabel(overview.runtime.scheduler)} · {overview.runtime.scheduledJobs} 项</span>
+            <span>版本 {overview.runtime.releaseVersion}</span>
             <span className="dashboard-status-line__time">更新于 {overview.lastUpdatedAt ? formatDateTime(overview.lastUpdatedAt) : '暂未更新'}</span>
           </div>
         </Panel>

@@ -347,6 +347,7 @@ async def test_dashboard_metrics_match_notice_filter_totals_beyond_500_rows(asyn
                 quality_score=90,
                 content_hash="dashboard-declaration",
                 category="项目申报",
+                published_at=now - timedelta(hours=3),
                 fetch_time=now - timedelta(hours=3),
             ),
             CollectedData(
@@ -357,6 +358,7 @@ async def test_dashboard_metrics_match_notice_filter_totals_beyond_500_rows(asyn
                 quality_score=30,
                 content_hash="dashboard-result",
                 category="项目申报",
+                published_at=now - timedelta(hours=2),
                 fetch_time=now - timedelta(hours=2),
             ),
             CollectedData(
@@ -367,6 +369,7 @@ async def test_dashboard_metrics_match_notice_filter_totals_beyond_500_rows(asyn
                 quality_score=20,
                 content_hash="dashboard-latest-non-hit",
                 category="未分类",
+                published_at=now,
                 fetch_time=now,
             ),
             CollectedData(
@@ -389,6 +392,7 @@ async def test_dashboard_metrics_match_notice_filter_totals_beyond_500_rows(asyn
                     quality_score=10,
                     content_hash=f"dashboard-filler-{index}",
                     category="未分类",
+                    published_at=now - timedelta(hours=1),
                     fetch_time=now - timedelta(hours=1),
                 )
                 for index in range(501)
