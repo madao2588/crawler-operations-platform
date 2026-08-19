@@ -13,6 +13,7 @@ web/coverage/
 *.tsbuildinfo
 .claude/
 .omx/
+.tmp/
 artifacts/
 backups/
 runtime/
